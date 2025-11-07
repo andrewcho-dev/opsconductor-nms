@@ -49,7 +49,7 @@ const getLayoutedElements = async (nodes, edges) => {
   return { nodes: layoutedNodes, edges }
 }
 
-const TopologyMap = () => {
+const TopologyMap = ({ onEdgeSelect, onNodeSelect }) => {
   const [nodes, setNodes, onNodesChange] = useNodesState([])
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
   const [loading, setLoading] = useState(true)
@@ -61,7 +61,7 @@ const TopologyMap = () => {
       
       const [devicesRes, edgesRes] = await Promise.all([
         fetch('/api/topology/nodes'),
-        fetch('/api/topology/edges'),
+        fetch('/api/topology/edges/enriched'),
       ])
 
       if (!devicesRes.ok || !edgesRes.ok) {
@@ -88,23 +88,42 @@ const TopologyMap = () => {
         position: { x: 0, y: 0 },
       }))
 
-      const flowEdges = topologyEdges.map((edge) => ({
-        id: `${edge.edge_id}`,
-        source: edge.a_dev,
-        target: edge.b_dev,
-        label: edge.method,
-        type: 'smoothstep',
-        style: {
-          stroke: getEdgeColor(edge.confidence),
-          strokeWidth: 2,
-        },
-        data: {
-          confidence: edge.confidence,
-          method: edge.method,
-          a_if: edge.a_if,
-          b_if: edge.b_if,
-        },
-      }))
+      const flowEdges = topologyEdges.map((edge) => {
+        const hasFlow = edge.flow_detected || false
+        const utilization = edge.utilization_bps || 0
+        const utilizationMbps = (utilization / 1000000).toFixed(2)
+        
+        let edgeLabel = edge.method
+        if (hasFlow && utilization > 0) {
+          edgeLabel = `${edge.method} (${utilizationMbps} Mbps)`
+        } else if (hasFlow) {
+          edgeLabel = `${edge.method} ✓`
+        }
+        
+        return {
+          id: `${edge.edge_id}`,
+          source: edge.a_dev,
+          target: edge.b_dev,
+          label: edgeLabel,
+          type: 'smoothstep',
+          style: {
+            stroke: hasFlow ? '#22c55e' : getEdgeColor(edge.confidence),
+            strokeWidth: hasFlow ? 3 : 2,
+            strokeDasharray: hasFlow ? 'none' : '5, 5',
+          },
+          data: {
+            confidence: edge.confidence,
+            method: edge.method,
+            a_if: edge.a_if,
+            b_if: edge.b_if,
+            flow_detected: hasFlow,
+            utilization_bps: utilization,
+            first_seen: edge.first_seen,
+            last_seen: edge.last_seen,
+            evidence: edge.evidence,
+          },
+        }
+      })
 
       const { nodes: layoutedNodes, edges: layoutedEdges } = await getLayoutedElements(
         flowNodes,
@@ -161,6 +180,18 @@ const TopologyMap = () => {
     )
   }
 
+  const handleEdgeClick = useCallback((event, edge) => {
+    if (onEdgeSelect) {
+      onEdgeSelect(edge)
+    }
+  }, [onEdgeSelect])
+
+  const handleNodeClick = useCallback((event, node) => {
+    if (onNodeSelect) {
+      onNodeSelect(node)
+    }
+  }, [onNodeSelect])
+
   return (
     <div className="topology-map">
       <ReactFlow
@@ -168,6 +199,8 @@ const TopologyMap = () => {
         edges={edges}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
+        onEdgeClick={handleEdgeClick}
+        onNodeClick={handleNodeClick}
         fitView
       >
         <Controls />
@@ -178,9 +211,9 @@ const TopologyMap = () => {
   )
 }
 
-const TopologyMapWrapper = () => (
+const TopologyMapWrapper = ({ onEdgeSelect, onNodeSelect }) => (
   <ReactFlowProvider>
-    <TopologyMap />
+    <TopologyMap onEdgeSelect={onEdgeSelect} onNodeSelect={onNodeSelect} />
   </ReactFlowProvider>
 )
 

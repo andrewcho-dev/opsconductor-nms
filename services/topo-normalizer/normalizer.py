@@ -15,9 +15,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class TopologyNormalizer:
-    def __init__(self, pg_dsn: str, suzieq_url: str = "http://suzieq:8000"):
+    def __init__(self, pg_dsn: str, suzieq_url: str = "http://localhost:8000", suzieq_api_key: str = "opsconductor-dev-key-12345"):
         self.pg_dsn = pg_dsn
         self.suzieq_url = suzieq_url
+        self.suzieq_api_key = suzieq_api_key
         self.conn = None
         
     def connect_db(self):
@@ -36,11 +37,12 @@ class TopologyNormalizer:
     
     def fetch_suzieq_data(self, endpoint: str) -> Optional[List[Dict]]:
         try:
-            response = requests.get(f"{self.suzieq_url}/api/v1/{endpoint}", timeout=10)
+            url = f"{self.suzieq_url}/api/v2/{endpoint}/show?access_token={self.suzieq_api_key}"
+            response = requests.get(url, timeout=10)
             if response.status_code == 200:
                 return response.json()
             else:
-                logger.warning(f"SuzieQ API returned {response.status_code} for {endpoint}")
+                logger.warning(f"SuzieQ API returned {response.status_code} for {endpoint}: {response.text}")
                 return None
         except requests.exceptions.RequestException as e:
             logger.warning(f"Failed to fetch {endpoint} from SuzieQ: {e}")
@@ -56,10 +58,15 @@ class TopologyNormalizer:
         
         cursor = self.conn.cursor()
         
+        cursor.execute("SELECT hostname, ip_address FROM hostname_mappings")
+        hostname_map = {row[0]: row[1] for row in cursor.fetchall()}
+        
         values = []
         for record in data:
+            hostname = record.get('hostname')
+            device_name = hostname_map.get(hostname, hostname)
             values.append((
-                record.get('hostname'),
+                device_name,
                 record.get('ifname'),
                 record.get('peerHostname'),
                 record.get('peerIfname'),
@@ -78,6 +85,24 @@ class TopologyNormalizer:
         
         cursor.close()
     
+    def ensure_lldp_peer_nodes(self):
+        logger.info("Creating nodes for LLDP peer devices...")
+        cursor = self.conn.cursor()
+        
+        cursor.execute("""
+            INSERT INTO devices (name, vendor, model, os_version, role, site)
+            SELECT DISTINCT peer_device, 'N/A', 'N/A', 'N/A', 'default', 'default'
+            FROM facts_lldp
+            WHERE peer_device NOT IN (SELECT name FROM devices)
+            ON CONFLICT (name) DO NOTHING
+        """)
+        
+        rows_inserted = cursor.rowcount
+        self.conn.commit()
+        logger.info(f"Created {rows_inserted} peer device nodes")
+        
+        cursor.close()
+    
     def compute_edges_from_lldp(self):
         logger.info("Computing edges from LLDP...")
         cursor = self.conn.cursor()
@@ -92,20 +117,22 @@ class TopologyNormalizer:
             )
             INSERT INTO edges (a_dev, a_if, b_dev, b_if, method, confidence, evidence, first_seen, last_seen)
             SELECT
-                device as a_dev,
-                ifname as a_if,
-                peer_device as b_dev,
-                peer_ifname as b_if,
+                COALESCE(hm1.ip_address, ll.device) as a_dev,
+                ll.ifname as a_if,
+                COALESCE(hm2.ip_address, ll.peer_device) as b_dev,
+                ll.peer_ifname as b_if,
                 'lldp' as method,
                 1.0 as confidence,
                 jsonb_build_object(
                     'source', 'lldp',
-                    'collected_at', collected_at,
-                    'payload', protocol_payload
+                    'collected_at', ll.collected_at,
+                    'payload', ll.protocol_payload
                 ) as evidence,
-                collected_at as first_seen,
-                collected_at as last_seen
-            FROM latest_lldp
+                ll.collected_at as first_seen,
+                ll.collected_at as last_seen
+            FROM latest_lldp ll
+            LEFT JOIN hostname_mappings hm1 ON ll.device = hm1.hostname
+            LEFT JOIN hostname_mappings hm2 ON ll.peer_device = hm2.hostname
             ON CONFLICT (edge_id) DO NOTHING
         """)
         
@@ -125,31 +152,41 @@ class TopologyNormalizer:
         
         cursor = self.conn.cursor()
         
+        hostname_to_ip = {}
         values = []
         for record in data:
-            values.append((
-                record.get('hostname'),
-                record.get('ipAddress'),
-                record.get('vendor'),
-                record.get('model'),
-                record.get('version'),
-                record.get('namespace'),
-                record.get('namespace')
-            ))
+            ip_addr = record.get('address')
+            hostname = record.get('hostname')
+            if ip_addr:
+                hostname_to_ip[hostname] = ip_addr
+                values.append((
+                    ip_addr,
+                    record.get('vendor'),
+                    record.get('model'),
+                    record.get('version'),
+                    record.get('namespace'),
+                    record.get('namespace')
+                ))
         
         if values:
             execute_values(
                 cursor,
-                """INSERT INTO devices (name, mgmt_ip, vendor, model, os_version, role, site)
+                """INSERT INTO devices (name, vendor, model, os_version, role, site)
                    VALUES %s
                    ON CONFLICT (name) DO UPDATE SET
-                       mgmt_ip = EXCLUDED.mgmt_ip,
                        vendor = EXCLUDED.vendor,
                        model = EXCLUDED.model,
                        os_version = EXCLUDED.os_version,
                        last_seen = NOW()""",
                 values
             )
+            
+            for hostname, ip in hostname_to_ip.items():
+                cursor.execute("""
+                    INSERT INTO hostname_mappings (hostname, ip_address)
+                    VALUES (%s, %s)
+                    ON CONFLICT (hostname) DO UPDATE SET ip_address = EXCLUDED.ip_address
+                """, (hostname, ip))
             self.conn.commit()
             logger.info(f"Updated {len(values)} devices")
         
@@ -165,10 +202,15 @@ class TopologyNormalizer:
         
         cursor = self.conn.cursor()
         
+        cursor.execute("SELECT hostname, ip_address FROM hostname_mappings")
+        hostname_map = {row[0]: row[1] for row in cursor.fetchall()}
+        
         values = []
         for record in data:
+            hostname = record.get('hostname')
+            device_name = hostname_map.get(hostname, hostname)
             values.append((
-                record.get('hostname'),
+                device_name,
                 record.get('ifname'),
                 record.get('adminState') == 'up',
                 record.get('state') == 'up',
@@ -203,6 +245,7 @@ class TopologyNormalizer:
             self.update_devices()
             self.update_interfaces()
             self.process_lldp_facts()
+            self.ensure_lldp_peer_nodes()
             self.compute_edges_from_lldp()
             logger.info("Normalization cycle completed")
         except Exception as e:

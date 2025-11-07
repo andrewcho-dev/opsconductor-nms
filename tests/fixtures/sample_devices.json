@@ -1,0 +1,20 @@
+[
+  {
+    "name": "test-router-1",
+    "mgmt_ip": "192.168.1.1",
+    "vendor": "Cisco",
+    "model": "ASR1001-X",
+    "os_version": "16.09.03",
+    "role": "router",
+    "site": "test-site"
+  },
+  {
+    "name": "test-switch-1",
+    "mgmt_ip": "192.168.1.2",
+    "vendor": "Cisco",
+    "model": "Catalyst 9300",
+    "os_version": "17.06.03",
+    "role": "switch",
+    "site": "test-site"
+  }
+]

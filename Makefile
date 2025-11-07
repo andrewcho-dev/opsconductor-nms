@@ -30,4 +30,5 @@ clean:
 	docker compose down -v
 
 test:
-	@echo "Tests not yet implemented"
+	@echo "Running smoke tests..."
+	cd tests && pip install -q -r requirements.txt && pytest -v test_smoke.py

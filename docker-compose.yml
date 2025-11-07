@@ -3,32 +3,42 @@ services:
     image: netenglabs/suzieq:latest
     volumes:
       - ./inventory:/inventory:ro
-      - sq-data:/data
-    command: ["suzieqd", "--config", "/inventory/sq.yaml"]
-    networks:
-      - opsconductor
+      - sq-data:/home/suzieq/parquet
+    network_mode: host
+    secrets:
+      - source: db_user
+        target: /run/secrets/db_user
+      - source: db_password
+        target: /run/secrets/db_password
+    entrypoint: ["/bin/bash", "-c"]
+    command: 
+      - |
+        mkdir -p ~/.suzieq
+        cp /inventory/sq.yaml ~/.suzieq/suzieq-cfg.yml
+        sq-poller -c ~/.suzieq/suzieq-cfg.yml -I /inventory/devices.yaml >/dev/null 2>&1 &
+        sq-rest-server --no-https
 
   topo-normalizer:
     build: ./services/topo-normalizer
     environment:
-      - PG_DSN=postgresql://oc:oc@db/opsconductor
+      - SUZIEQ_URL=http://localhost:8000
+    secrets:
+      - db_user
+      - db_password
     depends_on:
       - db
       - suzieq
-    networks:
-      - opsconductor
+    network_mode: host
     restart: unless-stopped
 
   api:
     build: ./services/api
-    environment:
-      - PG_DSN=postgresql://oc:oc@db/opsconductor
-    ports:
-      - "8088:8080"
+    secrets:
+      - db_user
+      - db_password
     depends_on:
       - db
-    networks:
-      - opsconductor
+    network_mode: host
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
@@ -38,45 +48,43 @@ services:
 
   ui:
     build: ./services/ui
-    ports:
-      - "8089:80"
+    network_mode: host
     depends_on:
       - api
-    networks:
-      - opsconductor
     restart: unless-stopped
 
   db:
     image: postgres:16
     environment:
       - POSTGRES_DB=opsconductor
-      - POSTGRES_USER=oc
-      - POSTGRES_PASSWORD=oc
+      - POSTGRES_USER_FILE=/run/secrets/db_user
+      - POSTGRES_PASSWORD_FILE=/run/secrets/db_password
     volumes:
       - db-data:/var/lib/postgresql/data
-    networks:
-      - opsconductor
+    secrets:
+      - db_user
+      - db_password
+    network_mode: host
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U oc"]
+      test: ["CMD-SHELL", "pg_isready -U $(cat /run/secrets/db_user)"]
       interval: 10s
       timeout: 5s
       retries: 5
 
   sflow:
     image: sflow/sflow-rt
-    ports:
-      - "6343:6343/udp"
+    network_mode: host
     depends_on:
       - api
-    networks:
-      - opsconductor
     restart: unless-stopped
 
 volumes:
   db-data:
   sq-data:
 
-networks:
-  opsconductor:
-    driver: bridge
+secrets:
+  db_user:
+    file: ./secrets/db_user.txt
+  db_password:
+    file: ./secrets/db_password.txt

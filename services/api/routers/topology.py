@@ -1,9 +1,13 @@
 from fastapi import APIRouter, Query, HTTPException
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 from datetime import datetime
+import json
+import httpx
 
 router = APIRouter(prefix="/topology", tags=["topology"])
+
+SFLOW_RT_URL = "http://localhost:8008"
 
 class Device(BaseModel):
     name: str
@@ -119,7 +123,7 @@ async def get_edges(
                 confidence=float(row['confidence']),
                 first_seen=row['first_seen'],
                 last_seen=row['last_seen'],
-                evidence=row['evidence']
+                evidence=json.loads(row['evidence']) if isinstance(row['evidence'], str) else row['evidence']
             )
             for row in rows
         ]
@@ -227,3 +231,107 @@ async def get_impact(
             affected_devices=devices,
             affected_count=len(devices)
         )
+
+class Interface(BaseModel):
+    device: str
+    ifname: str
+    admin_up: bool
+    oper_up: bool
+    speed_mbps: Optional[int]
+    vlan: Optional[str]
+    l3_addr: Optional[str]
+    l2_mac: Optional[str]
+    last_seen: Optional[datetime]
+
+@router.get("/interface", response_model=Interface)
+async def get_interface(
+    device: str,
+    ifname: str
+):
+    from main import db_pool
+    
+    async with db_pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT device, ifname, admin_up, oper_up, speed_mbps, vlan, l3_addr, l2_mac, last_seen
+            FROM interfaces
+            WHERE device = $1 AND ifname = $2
+        """, device, ifname)
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Interface not found")
+        
+        return Interface(
+            device=row['device'],
+            ifname=row['ifname'],
+            admin_up=row['admin_up'],
+            oper_up=row['oper_up'],
+            speed_mbps=row['speed_mbps'],
+            vlan=row['vlan'],
+            l3_addr=str(row['l3_addr']) if row['l3_addr'] else None,
+            l2_mac=str(row['l2_mac']) if row['l2_mac'] else None,
+            last_seen=row['last_seen']
+        )
+
+class FlowData(BaseModel):
+    agent: str
+    interface: str
+    bytes_per_sec: float
+    packets_per_sec: float
+
+@router.get("/flows", response_model=List[FlowData])
+async def get_flows():
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(f"{SFLOW_RT_URL}/dump/ALL/ifinoctets/json")
+            if response.status_code == 200:
+                data = response.json()
+                flows = []
+                for agent_data in data:
+                    agent = agent_data.get('agent', '')
+                    for iface, stats in agent_data.get('metricValue', {}).items():
+                        flows.append(FlowData(
+                            agent=agent,
+                            interface=iface,
+                            bytes_per_sec=stats.get('metricValue', 0),
+                            packets_per_sec=0
+                        ))
+                return flows
+    except Exception as e:
+        return []
+    return []
+
+@router.get("/edges/enriched", response_model=List[Dict[str, Any]])
+async def get_enriched_edges(
+    site: Optional[str] = None,
+    role: Optional[str] = None,
+    min_conf: float = Query(0.0, ge=0.0, le=1.0)
+):
+    from main import db_pool
+    
+    edges_data = await get_edges(site, role, min_conf)
+    
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(f"{SFLOW_RT_URL}/metric/ALL/ifinoctets/json")
+            flows = {}
+            if response.status_code == 200:
+                data = response.json()
+                for item in data:
+                    agent = item.get('agent', '')
+                    iface = item.get('dataSource', '').split('.')[-1] if item.get('dataSource') else ''
+                    value = item.get('metricValue', 0)
+                    if agent and iface:
+                        flows[f"{agent}:{iface}"] = value
+    except Exception as e:
+        flows = {}
+    
+    enriched = []
+    for edge in edges_data:
+        edge_dict = edge.dict()
+        src_key = f"{edge.a_dev}:{edge.a_if}"
+        dst_key = f"{edge.b_dev}:{edge.b_if}"
+        edge_dict['utilization_bps'] = flows.get(src_key, 0)
+        edge_dict['flow_detected'] = src_key in flows or dst_key in flows
+        enriched.append(edge_dict)
+    
+    return enriched

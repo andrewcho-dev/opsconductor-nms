@@ -1,14 +1,22 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 import os
 import asyncpg
-from routers import topology
+from routers import topology, sflow, netbox
+
+limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
 
 app = FastAPI(
     title="OpsConductor NMS Topology API",
     description="Network topology and troubleshooting API",
     version="0.1.0"
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -19,14 +27,25 @@ app.add_middleware(
 )
 
 app.include_router(topology.router)
+app.include_router(sflow.router)
+app.include_router(netbox.router)
 
 db_pool = None
 
 @app.on_event("startup")
 async def startup():
     global db_pool
-    dsn = os.getenv('PG_DSN', 'postgresql://oc:oc@db/opsconductor')
-    db_pool = await asyncpg.create_pool(dsn, min_size=2, max_size=10)
+    dsn = os.getenv('PG_DSN', 'postgresql://oc:oc@localhost/opsconductor')
+    min_pool_size = int(os.getenv('DB_POOL_MIN_SIZE', '5'))
+    max_pool_size = int(os.getenv('DB_POOL_MAX_SIZE', '20'))
+    command_timeout = int(os.getenv('DB_COMMAND_TIMEOUT', '30'))
+    
+    db_pool = await asyncpg.create_pool(
+        dsn, 
+        min_size=min_pool_size, 
+        max_size=max_pool_size,
+        command_timeout=command_timeout
+    )
 
 @app.on_event("shutdown")
 async def shutdown():

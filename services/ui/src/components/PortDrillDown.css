@@ -1,0 +1,161 @@
+.port-drilldown {
+  position: absolute;
+  right: 20px;
+  top: 80px;
+  width: 400px;
+  background: #1e1e1e;
+  border: 1px solid #333;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  z-index: 1000;
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+}
+
+.drilldown-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px;
+  border-bottom: 1px solid #333;
+  background: #252525;
+  border-radius: 8px 8px 0 0;
+}
+
+.drilldown-header h3 {
+  margin: 0;
+  font-size: 18px;
+  color: #fff;
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  color: #888;
+  font-size: 28px;
+  cursor: pointer;
+  padding: 0;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.close-btn:hover {
+  color: #fff;
+}
+
+.drilldown-content {
+  padding: 16px;
+}
+
+.drilldown-loading {
+  padding: 32px;
+  text-align: center;
+  color: #888;
+}
+
+.drilldown-section {
+  margin-bottom: 24px;
+}
+
+.drilldown-section:last-child {
+  margin-bottom: 0;
+}
+
+.drilldown-section h4 {
+  margin: 0 0 12px 0;
+  font-size: 14px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.info-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.info-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.info-item label {
+  color: #888;
+  font-size: 14px;
+}
+
+.info-item span {
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.method-badge {
+  background: #3b82f6;
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.confidence-badge {
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.confidence-high {
+  background: #22c55e;
+  color: #000;
+}
+
+.confidence-medium {
+  background: #eab308;
+  color: #000;
+}
+
+.confidence-low {
+  background: #f97316;
+  color: #000;
+}
+
+.confidence-very-low {
+  background: #ef4444;
+  color: #fff;
+}
+
+.confidence-unknown {
+  background: #666;
+  color: #fff;
+}
+
+.evidence-json {
+  background: #0d0d0d;
+  border: 1px solid #333;
+  border-radius: 4px;
+  padding: 12px;
+  overflow-x: auto;
+  font-size: 12px;
+  color: #22c55e;
+  line-height: 1.5;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.status-up {
+  color: #22c55e !important;
+  font-weight: 600 !important;
+}
+
+.status-down {
+  color: #ef4444 !important;
+  font-weight: 600 !important;
+}

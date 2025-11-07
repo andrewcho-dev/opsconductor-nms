@@ -1,0 +1,15 @@
+[
+  {
+    "a_dev": "test-router-1",
+    "a_if": "GigabitEthernet0/0/0",
+    "b_dev": "test-switch-1",
+    "b_if": "GigabitEthernet1/0/1",
+    "method": "lldp",
+    "confidence": 1.0,
+    "evidence": {
+      "peer_device": "test-switch-1",
+      "peer_ifname": "GigabitEthernet1/0/1",
+      "local_ifname": "GigabitEthernet0/0/0"
+    }
+  }
+]

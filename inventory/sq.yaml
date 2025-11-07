@@ -1,15 +1,14 @@
-suzieq:
-  data-directory: /data
-  logging-level: INFO
-  
-poller:
-  period: 300
-  
+data-directory: /home/suzieq/parquet
+temp-directory: /tmp/.suzieq/
+
 rest:
+  API_KEY: opsconductor-dev-key-12345
   address: 0.0.0.0
   port: 8000
-  
-sources:
-  - name: devices
-    type: native
-    path: /inventory/devices.yaml
+  logging-level: INFO
+  no-https: true
+
+poller:
+  period: 300
+  logging-level: INFO
+  log-stdout: true

@@ -52,34 +52,58 @@
 - Auto-refresh every 60 seconds
 - Dark theme
 
-### Task 8 - Port Drill-down Panel
-**Status: Pending** - API foundation ready, UI component needed
+### Task 8 - Port Drill-down Panel ✓
+- Enhanced UI component with interface details
+- Shows admin/oper status, speed, VLAN, IP, MAC
+- Displays LLDP/CDP evidence
+- New API endpoint: GET /topology/interface
 
-### Task 9 - Path Query UX
-**Status: Pending** - API endpoint implemented, UI form needed
+### Task 9 - Path Query UX ✓
+- Fixed API parameter mapping (src_dev/dst_dev)
+- Displays hop-by-hop path with interfaces
+- Shows discovery method and confidence scores
+- Device selector dropdowns
 
-### Task 10 - Impact Analysis
-**Status: Pending** - API endpoint implemented, UI display needed
+### Task 10 - Impact Analysis ✓
+- Fixed API parameter mapping (node)
+- Shows downstream affected devices
+- Displays total impact count
+- Click-to-analyze from topology view
 
-### Task 11 - Optional sFlow
-**Status: Pending** - sFlow-RT container in compose, integration pending
+### Task 11 - Optional sFlow ✓
+- Integrated sFlow-RT REST API
+- New endpoint: GET /topology/flows
+- New endpoint: GET /topology/edges/enriched
+- Real-time utilization display on edges
+- Visual indicators for flow-corroborated paths
 
-### Task 12 - Optional NetBox Sync
-**Status: Pending** - Not started
+### Task 12 - Optional NetBox Sync ✓
+- POST /netbox/sync/devices - Sync devices to NetBox
+- POST /netbox/sync/cables - Sync LLDP links as cables
+- POST /netbox/sync/all - Sync everything
+- Auto-creates sites, manufacturers, device types
+- Configurable via NETBOX_URL and NETBOX_API_TOKEN
 
-### Task 13 - Hardening
-**Status: Partial**
+### Task 13 - Hardening ✓
 - ✓ Health checks on API and DB
 - ✓ Structured logging in normalizer
-- ✗ Docker secrets (example only)
-- ✗ Rate limiting
-- ✗ Connection pooling tuning
+- ✓ Docker secrets implementation
+- ✓ Rate limiting (100/minute via SlowAPI)
+- ✓ Connection pooling tuning (configurable min/max/timeout)
 
-### Task 14 - CI Smoke Tests
-**Status: Pending** - Not started
+### Task 14 - CI Smoke Tests ✓
+- Test fixtures for devices and edges
+- Pytest-based async tests
+- Tests for device insertion, edge creation, canonical links, path queries
+- Makefile target: `make test`
+- Located in tests/ directory
 
-### Task 15 - Runbook
-**Status: Pending** - Not started
+### Task 15 - Runbook ✓
+- Comprehensive troubleshooting guide
+- Common scenarios: path finding, port lookup, impact analysis
+- API, SQL, and UI usage examples
+- Performance tuning recommendations
+- Located at docs/TROUBLESHOOTING.md
 
 ---
 
@@ -149,10 +173,12 @@ open http://localhost:8088/docs
 
 ## Known Limitations
 
-1. **No authentication** - Add auth middleware before production
-2. **LLDP/CDP only** - MAC/ARP correlation not yet implemented
-3. **No historical view** - Only shows current topology
+1. **No authentication** - Add auth middleware before production (rate limiting implemented)
+2. **MAC/ARP correlation** - Not fully integrated into edge discovery
+3. **No historical view** - Only shows current topology (last_seen/first_seen tracked)
 4. **No change detection** - No alerts on topology changes
 5. **No port-channel handling** - LAG/MLAG shown as individual links
+6. **sFlow requires configuration** - Network devices must send sFlow to port 6343
+7. **Test database** - Tests require separate test database (opsconductor_test)
 
 See `docs/ARCHITECTURE.md` for full design details.
