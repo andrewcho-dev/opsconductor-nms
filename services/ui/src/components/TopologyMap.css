@@ -1,0 +1,119 @@
+.topology-map {
+  width: 100%;
+  height: 100%;
+  background: #0a0a0a;
+}
+
+.topology-loading,
+.topology-error,
+.topology-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 1rem;
+  color: #888;
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #333;
+  border-top-color: #4f46e5;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.topology-error p {
+  color: #ef4444;
+}
+
+.topology-error button {
+  padding: 0.5rem 1rem;
+  background: #4f46e5;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.topology-error button:hover {
+  background: #4338ca;
+}
+
+.node-content {
+  padding: 0.5rem;
+  text-align: center;
+}
+
+.node-name {
+  font-weight: 600;
+  font-size: 14px;
+  margin-bottom: 4px;
+  color: #fff;
+}
+
+.node-details {
+  font-size: 11px;
+  color: #888;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.react-flow__node {
+  background: #1a1a1a;
+  border: 2px solid #333;
+  border-radius: 8px;
+  padding: 0;
+}
+
+.react-flow__node.selected {
+  border-color: #4f46e5;
+  box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.3);
+}
+
+.react-flow__edge-path {
+  stroke-width: 2;
+}
+
+.react-flow__edge.selected .react-flow__edge-path {
+  stroke: #4f46e5;
+  stroke-width: 3;
+}
+
+.react-flow__edge-text {
+  font-size: 10px;
+  fill: #888;
+}
+
+.react-flow__controls {
+  background: #1a1a1a;
+  border: 1px solid #333;
+}
+
+.react-flow__controls button {
+  background: #2a2a2a;
+  border-bottom: 1px solid #333;
+  color: #fff;
+}
+
+.react-flow__controls button:hover {
+  background: #333;
+}
+
+.react-flow__minimap {
+  background: #1a1a1a;
+  border: 1px solid #333;
+}
+
+.react-flow__background {
+  background: #0a0a0a;
+}

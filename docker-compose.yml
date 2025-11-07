@@ -1,0 +1,82 @@
+services:
+  suzieq:
+    image: netenglabs/suzieq:latest
+    volumes:
+      - ./inventory:/inventory:ro
+      - sq-data:/data
+    command: ["suzieqd", "--config", "/inventory/sq.yaml"]
+    networks:
+      - opsconductor
+
+  topo-normalizer:
+    build: ./services/topo-normalizer
+    environment:
+      - PG_DSN=postgresql://oc:oc@db/opsconductor
+    depends_on:
+      - db
+      - suzieq
+    networks:
+      - opsconductor
+    restart: unless-stopped
+
+  api:
+    build: ./services/api
+    environment:
+      - PG_DSN=postgresql://oc:oc@db/opsconductor
+    ports:
+      - "8088:8080"
+    depends_on:
+      - db
+    networks:
+      - opsconductor
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  ui:
+    build: ./services/ui
+    ports:
+      - "8089:80"
+    depends_on:
+      - api
+    networks:
+      - opsconductor
+    restart: unless-stopped
+
+  db:
+    image: postgres:16
+    environment:
+      - POSTGRES_DB=opsconductor
+      - POSTGRES_USER=oc
+      - POSTGRES_PASSWORD=oc
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    networks:
+      - opsconductor
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oc"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  sflow:
+    image: sflow/sflow-rt
+    ports:
+      - "6343:6343/udp"
+    depends_on:
+      - api
+    networks:
+      - opsconductor
+    restart: unless-stopped
+
+volumes:
+  db-data:
+  sq-data:
+
+networks:
+  opsconductor:
+    driver: bridge

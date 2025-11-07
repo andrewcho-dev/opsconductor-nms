@@ -1,0 +1,27 @@
+---
+# Example device inventory for SuzieQ
+# Uncomment and configure devices to start collecting topology data
+#
+# - name: router-1
+#   transport: ssh
+#   address: 192.168.1.1
+#   username: admin
+#   password: changeme
+#   devtype: eos
+#
+# - name: switch-1
+#   transport: ssh
+#   address: 192.168.1.2
+#   username: admin
+#   keyfile: /secrets/ssh_key
+#   devtype: nxos
+#
+# Supported devtypes:
+# - eos (Arista)
+# - nxos (Cisco Nexus)
+# - iosxe (Cisco IOS XE)
+# - junos (Juniper)
+# - cumulus (Cumulus Linux)
+# - sonic (SONiC)
+#
+# For production, use Docker secrets for credentials instead of passwords
