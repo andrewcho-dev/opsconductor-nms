@@ -86,8 +86,8 @@ const TopologyMap = ({ onEdgeSelect, onNodeSelect }) => {
             <div className="node-content">
               <div className="node-name">{device.name}</div>
               <div className="node-details">
-                {device.vendor && <span>{device.vendor}</span>}
-                {device.model && <span>{device.model}</span>}
+                {device.vendor && device.vendor !== 'Unknown' && device.vendor !== 'N/A' && <span>{device.vendor}</span>}
+                {device.model && device.model !== 'Unknown' && device.model !== 'N/A' && <span>{device.model}</span>}
               </div>
             </div>
           ),

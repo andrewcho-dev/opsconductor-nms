@@ -90,7 +90,7 @@ async def get_edges(
     query = """
         SELECT e.edge_id, e.a_dev, e.a_if, e.b_dev, e.b_if, e.method, 
                e.confidence, e.first_seen, e.last_seen, e.evidence
-        FROM vw_edges_current e
+        FROM vw_links_canonical e
         WHERE e.confidence >= $1
     """
     params = [min_conf]

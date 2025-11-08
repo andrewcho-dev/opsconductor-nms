@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 import subprocess
 import psycopg2
+import psycopg2.extras
 import re
 import time
 import os
 from datetime import datetime
+import pexpect
 
 DB_HOST = os.getenv('DB_HOST', 'localhost')
 DB_NAME = os.getenv('DB_NAME', 'opsconductor')
@@ -13,7 +15,14 @@ DB_PASS = os.getenv('DB_PASS', 'oc')
 POLL_INTERVAL = int(os.getenv('POLL_INTERVAL', '60'))
 
 DEVICES = [
-    {'hostname': 'axis-switch', 'ip': '10.121.19.21', 'community': 'public', 'vendor': 'Axis'},
+    {
+        'hostname': 'axis-switch', 
+        'ip': '10.121.19.21', 
+        'community': 'public', 
+        'vendor': 'Axis',
+        'ssh_user': 'root',
+        'ssh_pass': 'Metrolink222'
+    },
 ]
 
 def snmpwalk(ip, community, oid):
@@ -74,6 +83,111 @@ def get_interface_map(ip, community):
 def get_db():
     return psycopg2.connect(host=DB_HOST, database=DB_NAME, user=DB_USER, password=DB_PASS)
 
+def ssh_lldp_neighbors(ip, username, password, timeout=30):
+    try:
+        ssh_cmd = f'ssh -o StrictHostKeyChecking=no -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedKeyTypes=+ssh-rsa {username}@{ip}'
+        child = pexpect.spawn(ssh_cmd, timeout=timeout)
+        
+        i = child.expect(['password:', '# ', pexpect.TIMEOUT, pexpect.EOF])
+        
+        if i == 0:
+            child.sendline(password)
+            child.expect('# ')
+        elif i != 1:
+            return None
+        
+        child.sendline('terminal length 0')
+        child.expect('# ')
+        
+        child.sendline('show lldp neighbors')
+        child.expect('# ')
+        output = child.before.decode('utf-8', errors='ignore')
+        
+        child.sendline('exit')
+        child.close()
+        
+        return output
+    except Exception as e:
+        print(f"  SSH Error: {e}", flush=True)
+        return None
+
+def parse_lldp_neighbors(output, local_device):
+    neighbors = []
+    
+    if not output:
+        return neighbors
+    
+    lines = output.split('\n')
+    i = 0
+    
+    while i < len(lines):
+        line = lines[i].strip()
+        
+        if line.startswith('Local Interface'):
+            local_if_match = re.search(r'Local Interface\s*:\s*(.+)', line)
+            if not local_if_match:
+                i += 1
+                continue
+            
+            local_if = local_if_match.group(1).strip()
+            
+            neighbor = {
+                'local_device': local_device,
+                'local_if': local_if,
+                'chassis_id': '',
+                'port_id': '',
+                'system_name': '',
+                'port_desc': '',
+                'system_desc': '',
+                'mgmt_addr': ''
+            }
+            
+            i += 1
+            while i < len(lines) and not lines[i].strip().startswith('Local Interface'):
+                line = lines[i].strip()
+                
+                if line.startswith('Chassis ID'):
+                    match = re.search(r'Chassis ID\s*:\s*(.+)', line)
+                    if match:
+                        neighbor['chassis_id'] = match.group(1).strip()
+                
+                elif line.startswith('Port ID'):
+                    match = re.search(r'Port ID\s*:\s*(.+)', line)
+                    if match:
+                        neighbor['port_id'] = match.group(1).strip()
+                
+                elif line.startswith('System Name'):
+                    match = re.search(r'System Name\s*:\s*(.+)', line)
+                    if match:
+                        neighbor['system_name'] = match.group(1).strip()
+                
+                elif line.startswith('Port Description'):
+                    match = re.search(r'Port Description\s*:\s*(.+)', line)
+                    if match:
+                        neighbor['port_desc'] = match.group(1).strip()
+                
+                elif line.startswith('System Description'):
+                    match = re.search(r'System Description\s*:\s*(.+)', line)
+                    if match:
+                        neighbor['system_desc'] = match.group(1).strip()
+                
+                elif line.startswith('Management Address'):
+                    match = re.search(r'Management Address\s*:\s*([0-9\.]+)', line)
+                    if match:
+                        neighbor['mgmt_addr'] = match.group(1).strip()
+                
+                i += 1
+                
+                if line.startswith('Power Over Ethernet'):
+                    break
+            
+            if neighbor['system_name'] or neighbor['chassis_id']:
+                neighbors.append(neighbor)
+        else:
+            i += 1
+    
+    return neighbors
+
 def poll_device(device):
     print(f"[{datetime.now()}] Polling {device['hostname']} ({device['ip']})...", flush=True)
     
@@ -89,16 +203,32 @@ def poll_device(device):
         mac_entries = parse_mac_table(mac_output, port_map)
         print(f"  Found {len(mac_entries)} MAC entries", flush=True)
         
+        lldp_neighbors = []
+        if 'ssh_user' in device and 'ssh_pass' in device:
+            print(f"  Collecting LLDP via SSH...", flush=True)
+            lldp_output = ssh_lldp_neighbors(device['ip'], device['ssh_user'], device['ssh_pass'])
+            if lldp_output:
+                lldp_neighbors = parse_lldp_neighbors(lldp_output, device['hostname'])
+                print(f"  Found {len(lldp_neighbors)} LLDP neighbors", flush=True)
+        
         conn = get_db()
         try:
             with conn.cursor() as cur:
-                device_name = device['hostname']
+                device_name = device['ip']
+                hostname = device.get('hostname')
                 
                 cur.execute("""
                     INSERT INTO devices (name, mgmt_ip, vendor, last_seen)
                     VALUES (%s, %s, %s, NOW())
                     ON CONFLICT (name) DO UPDATE SET mgmt_ip = EXCLUDED.mgmt_ip, last_seen = NOW()
                 """, (device_name, device['ip'], device['vendor']))
+                
+                if hostname:
+                    cur.execute("""
+                        INSERT INTO hostname_mappings (hostname, ip_address)
+                        VALUES (%s, %s)
+                        ON CONFLICT (hostname) DO UPDATE SET ip_address = EXCLUDED.ip_address
+                    """, (hostname, device['ip']))
                 
                 for iface in interfaces:
                     cur.execute("""
@@ -120,6 +250,27 @@ def poll_device(device):
                         INSERT INTO facts_mac (device, ifname, mac_addr, vlan)
                         VALUES (%s, %s, %s, '1')
                     """, (device_name, entry['interface'], entry['mac']))
+                
+                if lldp_neighbors:
+                    cur.execute("DELETE FROM facts_lldp WHERE device = %s", (device_name,))
+                    for neighbor in lldp_neighbors:
+                        peer_device = neighbor['system_name'] or neighbor['mgmt_addr'] or neighbor['chassis_id']
+                        peer_ifname = neighbor['port_desc'] or neighbor['port_id'] or 'unknown'
+                        
+                        protocol_payload = {
+                            'chassis_id': neighbor['chassis_id'],
+                            'port_id': neighbor['port_id'],
+                            'system_name': neighbor['system_name'],
+                            'port_description': neighbor['port_desc'],
+                            'system_description': neighbor['system_desc'],
+                            'management_address': neighbor['mgmt_addr'],
+                            'source': 'ssh_lldp'
+                        }
+                        
+                        cur.execute("""
+                            INSERT INTO facts_lldp (device, ifname, peer_device, peer_ifname, protocol_payload)
+                            VALUES (%s, %s, %s, %s, %s::jsonb)
+                        """, (device_name, neighbor['local_if'], peer_device, peer_ifname, psycopg2.extras.Json(protocol_payload)))
                 
                 conn.commit()
                 print(f"  Successfully updated database", flush=True)

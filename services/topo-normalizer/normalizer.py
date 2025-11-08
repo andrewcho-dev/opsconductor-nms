@@ -90,16 +90,45 @@ class TopologyNormalizer:
         cursor = self.conn.cursor()
         
         cursor.execute("""
+            WITH peer_hostname_to_ip AS (
+                SELECT DISTINCT
+                    fl.peer_device as hostname,
+                    COALESCE(hm.ip_address, host(fa.ip_addr)) as ip_address
+                FROM facts_lldp fl
+                LEFT JOIN hostname_mappings hm ON fl.peer_device = hm.hostname
+                LEFT JOIN facts_arp fa ON 
+                    LOWER(TRIM('\"' FROM (fl.protocol_payload->>'chassis_id'))) = LOWER(REPLACE(fa.mac_addr::text, ':', '-'))
+                    AND NOT (fa.ip_addr <<= '169.254.0.0/16'::inet)
+                WHERE fl.peer_device NOT IN (SELECT name FROM devices)
+            ),
+            mapped_peers AS (
+                SELECT DISTINCT
+                    COALESCE(ip_address, hostname) as device_name
+                FROM peer_hostname_to_ip
+            )
             INSERT INTO devices (name, vendor, model, os_version, role, site)
-            SELECT DISTINCT peer_device, 'N/A', 'N/A', 'N/A', 'default', 'default'
-            FROM facts_lldp
-            WHERE peer_device NOT IN (SELECT name FROM devices)
+            SELECT device_name, 'N/A', 'N/A', 'N/A', 'endpoint', 'default'
+            FROM mapped_peers
+            WHERE device_name NOT IN (SELECT name FROM devices)
             ON CONFLICT (name) DO NOTHING
+        """)
+        
+        cursor.execute("""
+            INSERT INTO hostname_mappings (hostname, ip_address)
+            SELECT DISTINCT
+                fl.peer_device,
+                host(fa.ip_addr)
+            FROM facts_lldp fl
+            JOIN facts_arp fa ON 
+                LOWER(TRIM('\"' FROM (fl.protocol_payload->>'chassis_id'))) = LOWER(REPLACE(fa.mac_addr::text, ':', '-'))
+                AND NOT (fa.ip_addr <<= '169.254.0.0/16'::inet)
+                AND fa.ip_addr IS NOT NULL
+            ON CONFLICT (hostname) DO UPDATE SET ip_address = EXCLUDED.ip_address
         """)
         
         rows_inserted = cursor.rowcount
         self.conn.commit()
-        logger.info(f"Created {rows_inserted} peer device nodes")
+        logger.info(f"Created hostname mappings for {rows_inserted} LLDP peers")
         
         cursor.close()
     
@@ -108,31 +137,41 @@ class TopologyNormalizer:
         cursor = self.conn.cursor()
         
         cursor.execute("""
-            WITH latest_lldp AS (
-                SELECT DISTINCT ON (device, ifname, peer_device, peer_ifname)
-                    device, ifname, peer_device, peer_ifname, collected_at, protocol_payload
-                FROM facts_lldp
-                WHERE collected_at > NOW() - INTERVAL '1 hour'
-                ORDER BY device, ifname, peer_device, peer_ifname, collected_at DESC
+            WITH resolved_lldp AS (
+                SELECT
+                    COALESCE(hm1.ip_address, ll.device) as a_dev,
+                    ll.ifname as a_if,
+                    COALESCE(hm2.ip_address, ll.peer_device) as b_dev,
+                    ll.peer_ifname as b_if,
+                    ll.collected_at,
+                    ll.protocol_payload
+                FROM facts_lldp ll
+                LEFT JOIN hostname_mappings hm1 ON ll.device = hm1.hostname
+                LEFT JOIN hostname_mappings hm2 ON ll.peer_device = hm2.hostname
+                WHERE ll.collected_at > NOW() - INTERVAL '1 hour'
+            ),
+            latest_lldp AS (
+                SELECT DISTINCT ON (a_dev, a_if, b_dev, b_if)
+                    a_dev, a_if, b_dev, b_if, collected_at, protocol_payload
+                FROM resolved_lldp
+                ORDER BY a_dev, a_if, b_dev, b_if, collected_at DESC
             )
             INSERT INTO edges (a_dev, a_if, b_dev, b_if, method, confidence, evidence, first_seen, last_seen)
             SELECT
-                COALESCE(hm1.ip_address, ll.device) as a_dev,
-                ll.ifname as a_if,
-                COALESCE(hm2.ip_address, ll.peer_device) as b_dev,
-                ll.peer_ifname as b_if,
+                a_dev,
+                a_if,
+                b_dev,
+                b_if,
                 'lldp' as method,
                 1.0 as confidence,
                 jsonb_build_object(
                     'source', 'lldp',
-                    'collected_at', ll.collected_at,
-                    'payload', ll.protocol_payload
+                    'collected_at', collected_at,
+                    'payload', protocol_payload
                 ) as evidence,
-                ll.collected_at as first_seen,
-                ll.collected_at as last_seen
-            FROM latest_lldp ll
-            LEFT JOIN hostname_mappings hm1 ON ll.device = hm1.hostname
-            LEFT JOIN hostname_mappings hm2 ON ll.peer_device = hm2.hostname
+                collected_at as first_seen,
+                collected_at as last_seen
+            FROM latest_lldp
             ON CONFLICT (a_dev, a_if, b_dev, b_if) DO UPDATE SET last_seen = EXCLUDED.last_seen, confidence = EXCLUDED.confidence, evidence = EXCLUDED.evidence
         """)
         

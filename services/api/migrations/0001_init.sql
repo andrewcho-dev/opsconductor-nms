@@ -166,8 +166,7 @@ WITH scored_edges AS (
     ROW_NUMBER() OVER (
       PARTITION BY 
         LEAST(a_dev, b_dev),
-        CASE WHEN a_dev < b_dev THEN a_if ELSE b_if END,
-        CASE WHEN a_dev < b_dev THEN b_if ELSE a_if END
+        GREATEST(a_dev, b_dev)
       ORDER BY 
         confidence DESC,
         CASE method
