@@ -2,6 +2,7 @@ import os
 import time
 import logging
 import json
+import ipaddress
 from datetime import datetime
 from typing import Dict, List, Optional
 import psycopg2
@@ -103,11 +104,13 @@ class TopologyNormalizer:
             ),
             mapped_peers AS (
                 SELECT DISTINCT
-                    COALESCE(ip_address, hostname) as device_name
+                    COALESCE(ip_address, hostname) as device_name,
+                    ip_address
                 FROM peer_hostname_to_ip
+                WHERE ip_address IS NOT NULL
             )
-            INSERT INTO devices (name, vendor, model, os_version, role, site)
-            SELECT device_name, 'N/A', 'N/A', 'N/A', 'endpoint', 'default'
+            INSERT INTO devices (name, mgmt_ip, vendor, model, os_version, role, site)
+            SELECT device_name, ip_address::inet, 'N/A', 'N/A', 'N/A', 'endpoint', 'default'
             FROM mapped_peers
             WHERE device_name NOT IN (SELECT name FROM devices)
             ON CONFLICT (name) DO NOTHING
@@ -308,22 +311,28 @@ class TopologyNormalizer:
             ip_addr = record.get('address')
             hostname = record.get('hostname')
             if ip_addr:
-                hostname_to_ip[hostname] = ip_addr
-                values.append((
-                    ip_addr,
-                    record.get('vendor'),
-                    record.get('model'),
-                    record.get('version'),
-                    record.get('namespace'),
-                    record.get('namespace')
-                ))
+                try:
+                    ipaddress.ip_address(ip_addr)
+                    hostname_to_ip[hostname] = ip_addr
+                    values.append((
+                        ip_addr,
+                        ip_addr,
+                        record.get('vendor'),
+                        record.get('model'),
+                        record.get('version'),
+                        record.get('namespace'),
+                        record.get('namespace')
+                    ))
+                except ValueError:
+                    logger.debug(f"Skipping device {hostname} with invalid IP: {ip_addr}")
         
         if values:
             execute_values(
                 cursor,
-                """INSERT INTO devices (name, vendor, model, os_version, role, site)
+                """INSERT INTO devices (name, mgmt_ip, vendor, model, os_version, role, site)
                    VALUES %s
                    ON CONFLICT (name) DO UPDATE SET
+                       mgmt_ip = EXCLUDED.mgmt_ip,
                        vendor = EXCLUDED.vendor,
                        model = EXCLUDED.model,
                        os_version = EXCLUDED.os_version,
@@ -355,10 +364,18 @@ class TopologyNormalizer:
         cursor.execute("SELECT hostname, ip_address FROM hostname_mappings")
         hostname_map = {row[0]: row[1] for row in cursor.fetchall()}
         
+        cursor.execute("SELECT name FROM devices")
+        existing_devices = {row[0] for row in cursor.fetchall()}
+        
         values = []
         for record in data:
             hostname = record.get('hostname')
             device_name = hostname_map.get(hostname, hostname)
+            
+            if device_name not in existing_devices:
+                logger.debug(f"Skipping interface for non-existent device: {device_name}")
+                continue
+            
             values.append((
                 device_name,
                 record.get('ifname'),
@@ -396,11 +413,12 @@ class TopologyNormalizer:
         cursor = self.conn.cursor()
         
         cursor.execute("""
-            INSERT INTO devices (name, vendor, model, os_version, role, site)
-            SELECT DISTINCT a_dev, 'Unknown', 'Unknown', 'Unknown', 'endpoint', 'default'
+            INSERT INTO devices (name, mgmt_ip, vendor, model, os_version, role, site)
+            SELECT DISTINCT a_dev, a_dev::inet, 'Unknown', 'Unknown', 'Unknown', 'endpoint', 'default'
             FROM edges
             WHERE method = 'mac_arp' 
               AND a_dev NOT IN (SELECT name FROM devices)
+              AND a_dev ~ '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'
             ON CONFLICT (name) DO NOTHING
         """)
         
@@ -410,6 +428,7 @@ class TopologyNormalizer:
             FROM edges
             WHERE method = 'mac_arp' 
               AND b_dev NOT IN (SELECT name FROM devices)
+              AND b_dev ~ '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'
             ON CONFLICT (name) DO NOTHING
         """)
         

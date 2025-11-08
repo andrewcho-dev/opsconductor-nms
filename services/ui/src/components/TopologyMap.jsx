@@ -13,18 +13,81 @@ import './TopologyMap.css'
 
 const elk = new ELK()
 
-const elkOptions = {
-  'elk.algorithm': 'layered',
-  'elk.layered.spacing.nodeNodeBetweenLayers': '100',
-  'elk.spacing.nodeNode': '80',
-  'elk.direction': 'DOWN',
+const getElkOptions = (algorithm, direction) => {
+  const baseOptions = {
+    'elk.algorithm': algorithm,
+    'elk.spacing.nodeNode': '80',
+    'elk.direction': direction,
+  }
+
+  if (algorithm === 'layered') {
+    return {
+      ...baseOptions,
+      'elk.layered.spacing.nodeNodeBetweenLayers': '100',
+      'elk.layered.considerModelOrder.strategy': 'NODES_AND_EDGES',
+      'elk.layered.crossingMinimization.strategy': 'LAYER_SWEEP',
+      'elk.layered.nodePlacement.strategy': 'NETWORK_SIMPLEX',
+    }
+  }
+
+  return baseOptions
 }
 
-const getLayoutedElements = async (nodes, edges) => {
+const sortNodes = (nodes, sortBy) => {
+  if (sortBy === 'none') return nodes
+
+  return [...nodes].sort((a, b) => {
+    if (sortBy === 'ip') {
+      const ipA = a.id.split('.').map(Number)
+      const ipB = b.id.split('.').map(Number)
+      for (let i = 0; i < 4; i++) {
+        if (ipA[i] !== ipB[i]) return ipA[i] - ipB[i]
+      }
+      return 0
+    }
+    if (sortBy === 'name') {
+      return a.id.localeCompare(b.id)
+    }
+    return 0
+  })
+}
+
+
+const isIpInSubnet = (ip, subnet) => {
+  if (!subnet || subnet.trim() === '') return true
+  
+  const [subnetIp, maskBits] = subnet.split('/')
+  if (!maskBits) return true
+  
+  const ipParts = ip.split('.').map(Number)
+  const subnetParts = subnetIp.split('.').map(Number)
+  
+  if (ipParts.length !== 4 || subnetParts.length !== 4) return false
+  if (ipParts.some(isNaN) || subnetParts.some(isNaN)) return false
+  
+  const mask = parseInt(maskBits, 10)
+  let bitsToCheck = mask
+  
+  for (let i = 0; i < 4; i++) {
+    if (bitsToCheck >= 8) {
+      if (ipParts[i] !== subnetParts[i]) return false
+      bitsToCheck -= 8
+    } else if (bitsToCheck > 0) {
+      const maskValue = 256 - Math.pow(2, 8 - bitsToCheck)
+      if ((ipParts[i] & maskValue) !== (subnetParts[i] & maskValue)) return false
+      break
+    }
+  }
+  return true
+}
+
+const getLayoutedElements = async (nodes, edges, algorithm, direction, sortBy) => {
+  const sortedNodes = sortNodes(nodes, sortBy)
+  
   const graph = {
     id: 'root',
-    layoutOptions: elkOptions,
-    children: nodes.map((node) => ({
+    layoutOptions: getElkOptions(algorithm, direction),
+    children: sortedNodes.map((node) => ({
       id: node.id,
       width: 180,
       height: 60,
@@ -38,7 +101,7 @@ const getLayoutedElements = async (nodes, edges) => {
 
   const layoutedGraph = await elk.layout(graph)
 
-  const layoutedNodes = nodes.map((node) => {
+  const layoutedNodes = sortedNodes.map((node) => {
     const layoutedNode = layoutedGraph.children.find((n) => n.id === node.id)
     return {
       ...node,
@@ -61,6 +124,26 @@ const TopologyMap = ({ onEdgeSelect, onNodeSelect }) => {
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [layoutAlgorithm, setLayoutAlgorithm] = useState('layered')
+  const [layoutDirection, setLayoutDirection] = useState('DOWN')
+  const [nodeSorting, setNodeSorting] = useState('ip')
+  const [subnetFilterInput, setSubnetFilterInput] = useState('')
+  const [subnetFilter, setSubnetFilter] = useState('')
+  const [autoRefresh, setAutoRefresh] = useState(false)
+  const [theme, setTheme] = useState('light')
+
+  const applySubnetFilter = () => {
+    console.log('Applying subnet filter:', subnetFilterInput)
+    setNodes([])
+    setEdges([])
+    setSubnetFilter(subnetFilterInput)
+  }
+
+  const handleFilterKeyPress = (e) => {
+    if (e.key === 'Enter') {
+      applySubnetFilter()
+    }
+  }
 
   const fetchTopology = useCallback(async () => {
     try {
@@ -78,9 +161,13 @@ const TopologyMap = ({ onEdgeSelect, onNodeSelect }) => {
       const devices = await devicesRes.json()
       const topologyEdges = await edgesRes.json()
 
-      const flowNodes = devices.map((device) => ({
+      console.log('Filtering devices with subnet:', subnetFilter)
+      const filteredDevices = devices.filter(device => isIpInSubnet(device.name, subnetFilter))
+      console.log('Filtered devices count:', filteredDevices.length, 'out of', devices.length)
+      
+      const flowNodes = filteredDevices.map((device) => ({
         id: device.name,
-        type: 'default',
+        type: 'simplebezier',
         data: {
           label: (
             <div className="node-content">
@@ -95,7 +182,12 @@ const TopologyMap = ({ onEdgeSelect, onNodeSelect }) => {
         position: { x: 0, y: 0 },
       }))
 
-      const flowEdges = topologyEdges.map((edge) => {
+      const visibleNodeIds = new Set(filteredDevices.map(d => d.name))
+      const filteredEdges = topologyEdges.filter(edge => 
+        visibleNodeIds.has(edge.a_dev) && visibleNodeIds.has(edge.b_dev)
+      )
+      
+      const flowEdges = filteredEdges.map((edge) => {
         const hasFlow = edge.flow_detected || false
         const utilization = edge.utilization_bps || 0
         const utilizationMbps = (utilization / 1000000).toFixed(2)
@@ -112,7 +204,7 @@ const TopologyMap = ({ onEdgeSelect, onNodeSelect }) => {
           source: edge.a_dev,
           target: edge.b_dev,
           label: edgeLabel,
-          type: 'smoothstep',
+          type: 'simplebezier',
           style: {
             stroke: hasFlow ? '#22c55e' : getEdgeColor(edge.confidence),
             strokeWidth: hasFlow ? 3 : 2,
@@ -134,7 +226,10 @@ const TopologyMap = ({ onEdgeSelect, onNodeSelect }) => {
 
       const { nodes: layoutedNodes, edges: layoutedEdges } = await getLayoutedElements(
         flowNodes,
-        flowEdges
+        flowEdges,
+        layoutAlgorithm,
+        layoutDirection,
+        nodeSorting
       )
 
       setNodes(layoutedNodes)
@@ -145,13 +240,18 @@ const TopologyMap = ({ onEdgeSelect, onNodeSelect }) => {
       setError(err.message)
       setLoading(false)
     }
-  }, [])
+  }, [layoutAlgorithm, layoutDirection, nodeSorting, subnetFilter])
 
   useEffect(() => {
     fetchTopology()
-    const interval = setInterval(fetchTopology, 60000)
-    return () => clearInterval(interval)
   }, [fetchTopology])
+
+  useEffect(() => {
+    if (autoRefresh) {
+      const interval = setInterval(fetchTopology, 60000)
+      return () => clearInterval(interval)
+    }
+  }, [fetchTopology, autoRefresh])
 
   const handleEdgeClick = useCallback((event, edge) => {
     if (onEdgeSelect) {
@@ -193,7 +293,67 @@ const TopologyMap = ({ onEdgeSelect, onNodeSelect }) => {
   }
 
   return (
-    <div className="topology-map">
+    <div className="topology-map" data-theme={theme}>
+      <div className="topology-controls">
+        <div className="control-group">
+          <label>Theme:</label>
+          <select value={theme} onChange={(e) => setTheme(e.target.value)}>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+            <option value="blue">Blue</option>
+            <option value="forest">Forest</option>
+            <option value="slate">Slate</option>
+          </select>
+        </div>
+        <div className="control-group">
+          <label>Layout:</label>
+          <select value={layoutAlgorithm} onChange={(e) => setLayoutAlgorithm(e.target.value)}>
+            <option value="layered">Layered (Hierarchical)</option>
+            <option value="force">Force-Directed</option>
+            <option value="stress">Stress Minimization</option>
+            <option value="mrtree">Tree</option>
+            <option value="radial">Radial</option>
+          </select>
+        </div>
+        <div className="control-group">
+          <label>Direction:</label>
+          <select value={layoutDirection} onChange={(e) => setLayoutDirection(e.target.value)}>
+            <option value="DOWN">Top to Bottom</option>
+            <option value="UP">Bottom to Top</option>
+            <option value="RIGHT">Left to Right</option>
+            <option value="LEFT">Right to Left</option>
+          </select>
+        </div>
+        <div className="control-group">
+          <label>Sort By:</label>
+          <select value={nodeSorting} onChange={(e) => setNodeSorting(e.target.value)}>
+            <option value="ip">IP Address</option>
+            <option value="name">Name</option>
+            <option value="none">None</option>
+          </select>
+        </div>
+        <div className="control-group">
+          <label>Network Filter:</label>
+          <input 
+            type="text" 
+            value={subnetFilterInput} 
+            onChange={(e) => setSubnetFilterInput(e.target.value)}
+            onKeyDown={handleFilterKeyPress}
+            placeholder="e.g., 10.121.19.0/24"
+          />
+          <button onClick={applySubnetFilter} className="apply-filter-btn" title="Apply filter">↵</button>
+        </div>
+        <div className="control-group">
+          <label>
+            <input 
+              type="checkbox" 
+              checked={autoRefresh} 
+              onChange={(e) => setAutoRefresh(e.target.checked)}
+            />
+            Auto-refresh
+          </label>
+        </div>
+      </div>
       <ReactFlow
         nodes={nodes}
         edges={edges}
