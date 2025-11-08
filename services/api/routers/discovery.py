@@ -1,0 +1,341 @@
+from fastapi import APIRouter, HTTPException, Depends
+from pydantic import BaseModel
+from typing import List, Optional
+import psycopg2
+from psycopg2.extras import RealDictCursor, Json
+import os
+
+router = APIRouter(prefix="/discovery", tags=["discovery"])
+
+PG_DSN = os.getenv("PG_DSN", "postgresql://oc:oc@localhost/opsconductor")
+
+def get_db():
+    conn = psycopg2.connect(PG_DSN)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+class ScanRequest(BaseModel):
+    network_cidr: str
+    scan_ping: bool = True
+    scan_ssh: bool = True
+    scan_snmp: bool = True
+    scan_https: bool = True
+    credential_ids: Optional[List[int]] = None
+
+class CredentialCreate(BaseModel):
+    name: str
+    type: str
+    ssh_username: Optional[str] = None
+    ssh_password: Optional[str] = None
+    ssh_port: int = 22
+    snmp_community: Optional[str] = None
+    http_username: Optional[str] = None
+    http_password: Optional[str] = None
+    priority: int = 100
+    enabled: bool = True
+
+class DeviceImport(BaseModel):
+    ips: List[str]
+    import_to_suzieq: bool = False
+    import_to_snmp_poller: bool = False
+
+@router.post("/scan")
+async def start_scan(scan: ScanRequest, conn=Depends(get_db)):
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    
+    cursor.execute("""
+        INSERT INTO discovery_scans (
+            network_cidr, status, scan_ping, scan_ssh, scan_snmp, scan_https, credential_ids
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+        RETURNING id, network_cidr, status, created_at
+    """, (
+        scan.network_cidr,
+        'pending',
+        scan.scan_ping,
+        scan.scan_ssh,
+        scan.scan_snmp,
+        scan.scan_https,
+        scan.credential_ids or []
+    ))
+    
+    result = cursor.fetchone()
+    conn.commit()
+    cursor.close()
+    
+    return {
+        "scan_id": result['id'],
+        "network_cidr": result['network_cidr'],
+        "status": result['status'],
+        "created_at": result['created_at'].isoformat()
+    }
+
+@router.get("/scans")
+async def list_scans(limit: int = 50, conn=Depends(get_db)):
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    
+    cursor.execute("""
+        SELECT 
+            id, network_cidr, status, started_at, completed_at,
+            devices_found, devices_reachable, created_at
+        FROM discovery_scans
+        ORDER BY created_at DESC
+        LIMIT %s
+    """, (limit,))
+    
+    scans = cursor.fetchall()
+    cursor.close()
+    
+    return [{
+        "id": s['id'],
+        "network_cidr": s['network_cidr'],
+        "status": s['status'],
+        "started_at": s['started_at'].isoformat() if s['started_at'] else None,
+        "completed_at": s['completed_at'].isoformat() if s['completed_at'] else None,
+        "devices_found": s['devices_found'],
+        "devices_reachable": s['devices_reachable'],
+        "created_at": s['created_at'].isoformat()
+    } for s in scans]
+
+@router.get("/scans/{scan_id}")
+async def get_scan(scan_id: int, conn=Depends(get_db)):
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    
+    cursor.execute("""
+        SELECT * FROM discovery_scans WHERE id = %s
+    """, (scan_id,))
+    
+    scan = cursor.fetchone()
+    cursor.close()
+    
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+    
+    return scan
+
+@router.get("/devices")
+async def list_discovered_devices(
+    status: Optional[str] = None,
+    reachable_only: bool = False,
+    limit: int = 100,
+    conn=Depends(get_db)
+):
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    
+    query = """
+        SELECT 
+            ip, hostname, vendor, model, os_version, role, site,
+            ping_reachable, ssh_reachable, snmp_reachable, https_reachable,
+            discovery_status, discovered_at, last_probed, imported_to_devices
+        FROM discovered_devices
+        WHERE 1=1
+    """
+    params = []
+    
+    if status:
+        query += " AND discovery_status = %s"
+        params.append(status)
+    
+    if reachable_only:
+        query += " AND discovery_status = 'reachable'"
+    
+    query += " ORDER BY discovered_at DESC LIMIT %s"
+    params.append(limit)
+    
+    cursor.execute(query, params)
+    devices = cursor.fetchall()
+    cursor.close()
+    
+    return [{
+        "ip": str(d['ip']),
+        "hostname": d['hostname'],
+        "vendor": d['vendor'],
+        "model": d['model'],
+        "os_version": d['os_version'],
+        "role": d['role'],
+        "site": d['site'],
+        "ping_reachable": d['ping_reachable'],
+        "ssh_reachable": d['ssh_reachable'],
+        "snmp_reachable": d['snmp_reachable'],
+        "https_reachable": d['https_reachable'],
+        "discovery_status": d['discovery_status'],
+        "discovered_at": d['discovered_at'].isoformat() if d['discovered_at'] else None,
+        "last_probed": d['last_probed'].isoformat() if d['last_probed'] else None,
+        "imported": d['imported_to_devices']
+    } for d in devices]
+
+@router.get("/devices/{ip}")
+async def get_discovered_device(ip: str, conn=Depends(get_db)):
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    
+    cursor.execute("""
+        SELECT * FROM discovered_devices WHERE ip = %s
+    """, (ip,))
+    
+    device = cursor.fetchone()
+    cursor.close()
+    
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    return device
+
+@router.post("/devices/import")
+async def import_devices(import_req: DeviceImport, conn=Depends(get_db)):
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    
+    imported_count = 0
+    errors = []
+    
+    for ip in import_req.ips:
+        try:
+            cursor.execute("""
+                SELECT ip, hostname, vendor, model, os_version, snmp_reachable, ssh_reachable
+                FROM discovered_devices
+                WHERE ip = %s AND discovery_status = 'reachable'
+            """, (ip,))
+            
+            device = cursor.fetchone()
+            if not device:
+                errors.append(f"{ip}: Device not found or not reachable")
+                continue
+            
+            cursor.execute("""
+                INSERT INTO devices (name, mgmt_ip, vendor, model, os_version, role, site)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (name) DO UPDATE SET
+                    mgmt_ip = EXCLUDED.mgmt_ip,
+                    vendor = EXCLUDED.vendor,
+                    model = EXCLUDED.model,
+                    os_version = EXCLUDED.os_version,
+                    last_seen = NOW()
+            """, (
+                str(device['ip']),
+                device['ip'],
+                device['vendor'] or 'Unknown',
+                device['model'] or 'Unknown',
+                device['os_version'] or 'Unknown',
+                'discovered',
+                'default'
+            ))
+            
+            cursor.execute("""
+                UPDATE discovered_devices
+                SET imported_to_devices = TRUE, 
+                    imported_at = NOW(),
+                    device_name = %s
+                WHERE ip = %s
+            """, (str(device['ip']), ip))
+            
+            imported_count += 1
+            
+        except Exception as e:
+            errors.append(f"{ip}: {str(e)}")
+            conn.rollback()
+            continue
+    
+    conn.commit()
+    cursor.close()
+    
+    return {
+        "imported_count": imported_count,
+        "errors": errors
+    }
+
+@router.delete("/devices/{ip}")
+async def delete_discovered_device(ip: str, conn=Depends(get_db)):
+    cursor = conn.cursor()
+    
+    cursor.execute("DELETE FROM discovered_devices WHERE ip = %s", (ip,))
+    deleted = cursor.rowcount
+    
+    conn.commit()
+    cursor.close()
+    
+    if deleted == 0:
+        raise HTTPException(status_code=404, detail="Device not found")
+    
+    return {"status": "deleted", "ip": ip}
+
+@router.post("/credentials")
+async def create_credential(cred: CredentialCreate, conn=Depends(get_db)):
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    
+    cursor.execute("""
+        INSERT INTO credentials (
+            name, type, ssh_username, ssh_password, ssh_port,
+            snmp_community, http_username, http_password,
+            priority, enabled
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        RETURNING id, name, type, created_at
+    """, (
+        cred.name,
+        cred.type,
+        cred.ssh_username,
+        cred.ssh_password,
+        cred.ssh_port,
+        cred.snmp_community,
+        cred.http_username,
+        cred.http_password,
+        cred.priority,
+        cred.enabled
+    ))
+    
+    result = cursor.fetchone()
+    conn.commit()
+    cursor.close()
+    
+    return result
+
+@router.get("/credentials")
+async def list_credentials(conn=Depends(get_db)):
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    
+    cursor.execute("""
+        SELECT id, name, type, ssh_username, ssh_port, snmp_community,
+               http_username, priority, enabled, created_at
+        FROM credentials
+        ORDER BY priority ASC, created_at DESC
+    """)
+    
+    creds = cursor.fetchall()
+    cursor.close()
+    
+    return creds
+
+@router.delete("/credentials/{cred_id}")
+async def delete_credential(cred_id: int, conn=Depends(get_db)):
+    cursor = conn.cursor()
+    
+    cursor.execute("DELETE FROM credentials WHERE id = %s", (cred_id,))
+    deleted = cursor.rowcount
+    
+    conn.commit()
+    cursor.close()
+    
+    if deleted == 0:
+        raise HTTPException(status_code=404, detail="Credential not found")
+    
+    return {"status": "deleted", "id": cred_id}
+
+@router.get("/summary")
+async def get_discovery_summary(conn=Depends(get_db)):
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
+    
+    cursor.execute("SELECT * FROM vw_discovery_summary")
+    summary = cursor.fetchall()
+    
+    cursor.execute("""
+        SELECT COUNT(*) as total_devices,
+               COUNT(*) FILTER (WHERE imported_to_devices) as imported_count
+        FROM discovered_devices
+    """)
+    totals = cursor.fetchone()
+    
+    cursor.close()
+    
+    return {
+        "by_status": summary,
+        "totals": totals
+    }

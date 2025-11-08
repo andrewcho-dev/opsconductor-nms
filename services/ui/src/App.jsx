@@ -3,6 +3,7 @@ import TopologyMap from './components/TopologyMap'
 import PortDrillDown from './components/PortDrillDown'
 import PathQuery from './components/PathQuery'
 import ImpactAnalysis from './components/ImpactAnalysis'
+import Discovery from './components/Discovery'
 import './App.css'
 
 function App() {
@@ -27,6 +28,7 @@ function App() {
 
   return (
     <div className="app">
+      <Discovery />
       <header className="header">
         <h1>OpsConductor NMS</h1>
         <p>Network Topology & Troubleshooting</p>

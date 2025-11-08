@@ -49,6 +49,22 @@ services:
     network_mode: host
     restart: unless-stopped
 
+  discovery:
+    build: ./services/discovery
+    environment:
+      - DB_HOST=localhost
+      - DB_NAME=opsconductor
+      - DB_USER=oc
+      - DB_PASS=oc
+      - SCAN_INTERVAL=10
+    secrets:
+      - db_user
+      - db_password
+    depends_on:
+      - db
+    network_mode: host
+    restart: unless-stopped
+
   api:
     build: ./services/api
     environment:

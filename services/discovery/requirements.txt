@@ -1,0 +1,6 @@
+psycopg2-binary==2.9.9
+asyncio==3.4.3
+aiohttp==3.9.1
+asyncssh==2.14.1
+pysnmp==4.4.12
+python-nmap==0.7.1
