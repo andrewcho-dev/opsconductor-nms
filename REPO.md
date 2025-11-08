@@ -172,6 +172,12 @@ DEVICES = [
 ]
 ```
 
+**Device Identity & Hostname Mapping**:
+- Devices are created with **IP address** as the canonical `name` field (e.g., `10.121.19.21`)
+- If a hostname is provided, creates a `hostname_mappings` entry: `axis-switch` → `10.121.19.21`
+- This allows LLDP neighbors reporting "axis-switch" to be resolved to the IP address for consistent topology
+- Prevents duplicate device nodes (one by hostname, one by IP)
+
 **Vendor Compatibility**: Any SNMP-capable switch (Cisco, HP, Dell, Axis, Planet, FS.com, D-Link, Ciena, etc.)
 
 ### 4. Topology Normalizer
@@ -286,6 +292,34 @@ CREATE TABLE devices (
 
 **Purpose**: Central device inventory
 **Auto-Populated By**: SuzieQ collector, SNMP poller, normalizer (for discovered IPs)
+**Device Identity**: All devices use **IP addresses** as their canonical `name` field. Hostnames are stored separately in `hostname_mappings` table.
+
+#### hostname_mappings
+
+```sql
+CREATE TABLE hostname_mappings (
+    hostname TEXT PRIMARY KEY,              -- Device hostname
+    ip_address TEXT NOT NULL                -- Canonical IP address
+);
+
+CREATE INDEX idx_hostname_mappings_ip ON hostname_mappings (ip_address);
+```
+
+**Purpose**: Maps device hostnames to their canonical IP addresses
+**Why Needed**: LLDP/CDP neighbors report system names (hostnames), but we need to resolve them to IP addresses for consistent topology
+**Populated By**: 
+- SNMP poller: Creates mappings when polling devices with both hostname and IP
+- Topology normalizer: Correlates LLDP peer hostnames with IPs from ARP/MAC tables
+
+**Example Mapping**:
+```sql
+INSERT INTO hostname_mappings (hostname, ip_address) VALUES 
+    ('axis-switch', '10.121.19.21'),
+    ('cam-cam01', '10.121.19.101'),
+    ('cam-cam02', '10.121.19.102');
+```
+
+**Usage**: When LLDP reports a peer device as "cam-cam01", the normalizer resolves it to "10.121.19.101" before creating edges, preventing duplicate device nodes.
 
 #### interfaces
 
@@ -416,33 +450,38 @@ ORDER BY a_dev, a_if, b_dev, b_if, method, last_seen DESC;
 #### vw_links_canonical
 
 ```sql
-CREATE VIEW vw_links_canonical AS
-SELECT DISTINCT ON (
-    LEAST(a_dev, b_dev), 
-    GREATEST(a_dev, b_dev),
-    LEAST(a_if, b_if),
-    GREATEST(a_if, b_if)
+CREATE OR REPLACE VIEW vw_links_canonical AS
+WITH scored_edges AS (
+  SELECT
+    *,
+    ROW_NUMBER() OVER (
+      PARTITION BY 
+        LEAST(a_dev, b_dev),
+        GREATEST(a_dev, b_dev)
+      ORDER BY 
+        confidence DESC,
+        CASE method
+          WHEN 'lldp' THEN 1
+          WHEN 'cdp' THEN 2
+          WHEN 'mac_arp' THEN 3
+          WHEN 'ospf' THEN 4
+          WHEN 'bgp' THEN 5
+          WHEN 'inferred_flow' THEN 6
+        END,
+        last_seen DESC
+    ) AS rn
+  FROM vw_edges_current
 )
-    edge_id, a_dev, a_if, b_dev, b_if, method, confidence, evidence, first_seen, last_seen
-FROM vw_edges_current
-ORDER BY 
-    LEAST(a_dev, b_dev), 
-    GREATEST(a_dev, b_dev),
-    LEAST(a_if, b_if),
-    GREATEST(a_if, b_if),
-    confidence DESC,
-    CASE method
-        WHEN 'lldp' THEN 1
-        WHEN 'cdp' THEN 2
-        WHEN 'mac_arp' THEN 3
-        WHEN 'ospf' THEN 4
-        WHEN 'bgp' THEN 5
-        ELSE 6
-    END;
+SELECT
+  edge_id, a_dev, a_if, b_dev, b_if, method, confidence, first_seen, last_seen, evidence
+FROM scored_edges
+WHERE rn = 1;
 ```
 
-**Purpose**: Single canonical edge per physical link (highest confidence)
-**Used By**: Path queries, impact analysis
+**Purpose**: Single highest-confidence edge per device pair (deduplicates LLDP vs MAC_ARP)
+**Key Change**: Partitions by **device pair only** (not interface pair), ensuring only one edge is shown between any two devices
+**Example**: If both LLDP (confidence 1.0) and MAC_ARP (confidence 0.9) edges exist between the same device pair, only the LLDP edge is returned
+**Used By**: `/topology/edges` API endpoint, UI visualization, path queries, impact analysis
 
 ---
 
@@ -458,8 +497,13 @@ ORDER BY
 1. SuzieQ polls devices via SSH
 2. Executes vendor-specific commands (e.g., `show lldp neighbors` on Cisco)
 3. Normalizes output to standard format
-4. Writes to `facts_lldp` table
-5. Normalizer creates edges with method='lldp', confidence=1.0
+4. Writes to `facts_lldp` table with peer device **hostnames** (e.g., "cam-cam01")
+5. Normalizer resolves peer hostnames to IP addresses using:
+   - `hostname_mappings` table (populated by SNMP poller)
+   - ARP/MAC correlation (matches LLDP chassis_id MAC with ARP table)
+6. Creates edges with resolved IP addresses: method='lldp', confidence=1.0
+
+**Hostname Resolution**: LLDP peers are reported by system name (hostname), but all edges use IP addresses as device identifiers. The normalizer performs hostname→IP resolution **before** creating edges to prevent duplicate device nodes.
 
 **Requirements**:
 - LLDP or CDP must be enabled on devices
@@ -1125,18 +1169,56 @@ GROUP BY device;
 
 ### Duplicate Devices
 
-**Symptom**: Same device appears multiple times with different names
+**Symptom**: Same device appears multiple times with different names (e.g., both "axis-switch" and "10.121.19.21")
 
-**Cause**: Device created with both hostname and IP address
+**Cause**: Device created with both hostname and IP address before hostname resolution was implemented
 
-**Solution**:
+**Solution** (Now Prevented Automatically):
+- SNMP poller creates devices with **IP address only** as the canonical name
+- Hostnames are stored in `hostname_mappings` table
+- Topology normalizer resolves LLDP peer hostnames to IPs before creating edges
+- This ensures only one device node per physical device
+
+**Manual Cleanup** (if duplicates exist from old data):
 ```sql
 -- Find duplicates
 SELECT name, mgmt_ip FROM devices WHERE mgmt_ip IS NOT NULL;
 
+-- Check hostname mappings
+SELECT * FROM hostname_mappings;
+
 -- Delete hostname-based duplicates (keep IP-based)
-DELETE FROM devices WHERE name = '<hostname>' AND mgmt_ip IS NOT NULL;
+DELETE FROM devices WHERE name = '<hostname>' AND EXISTS (
+    SELECT 1 FROM hostname_mappings WHERE hostname = '<hostname>'
+);
+
+-- Delete edges referencing old hostname-based devices
+DELETE FROM edges WHERE a_dev = '<hostname>' OR b_dev = '<hostname>';
 ```
+
+### Duplicate Edges (Multiple Connections Between Same Devices)
+
+**Symptom**: Two lines shown between the same device pair in topology visualization (e.g., both LLDP and MAC_ARP edges)
+
+**Cause**: Before fix, `vw_links_canonical` partitioned by interface pairs, not device pairs
+
+**Solution** (Now Fixed Automatically):
+- `/topology/edges` API endpoint uses `vw_links_canonical` view
+- View partitions by **device pair only** (not interfaces)
+- Returns only the highest-confidence edge per device pair
+- LLDP edges (confidence 1.0) automatically preferred over MAC_ARP edges (confidence 0.9)
+
+**Example**:
+```sql
+-- Before fix: Both edges returned
+10.121.19.21 (GigabitEthernet 1/1) → 10.121.19.101 (eth0)         [LLDP, 1.0]
+10.121.19.101 (arp-inferred)       → 10.121.19.21 (Port 1)        [MAC_ARP, 0.9]
+
+-- After fix: Only highest confidence returned
+10.121.19.21 (GigabitEthernet 1/1) → 10.121.19.101 (eth0)         [LLDP, 1.0]
+```
+
+**Note**: The lower-confidence edges still exist in the database for historical/debugging purposes, but are not displayed in the UI.
 
 ### Performance Issues
 
