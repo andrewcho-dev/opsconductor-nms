@@ -258,17 +258,11 @@ def ssh_lldp_neighbors(ip, username, password, timeout=30):
     try:
         expect_script = f"""#!/usr/bin/expect -f
 set timeout {timeout}
-spawn ssh -o StrictHostKeyChecking=no -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedKeyTypes=+ssh-rsa -o KexAlgorithms=+diffie-hellman-group-exchange-sha1,diffie-hellman-group14-sha1 -o ConnectTimeout=5 {username}@{ip}
+spawn ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 {username}@{ip}
 expect {{
-    "Press any key" {{send "\\r"; exp_continue}}
+    "Press <Enter>" {{send "\\r"; exp_continue}}
     "Username:" {{send "{username}\\r"; exp_continue}}
     "password:" {{send "{password}\\r"; exp_continue}}
-    "# " {{send ""}}
-    timeout {{exit 1}}
-}}
-sleep 0.5
-send "terminal length 0\\r"
-expect {{
     "# " {{send ""}}
     timeout {{exit 1}}
 }}
