@@ -208,20 +208,34 @@ async def get_impact(
     
     async with db_pool.acquire() as conn:
         query = """
-            WITH RECURSIVE downstream AS (
-                SELECT DISTINCT b_dev as device
+            WITH RECURSIVE downstream (device, depth) AS (
+                SELECT DISTINCT 
+                    CASE 
+                        WHEN a_dev = $1 THEN b_dev
+                        ELSE a_dev
+                    END as device,
+                    1 as depth
                 FROM vw_links_canonical
-                WHERE a_dev = $1
-                  AND ($2::text IS NULL OR a_if = $2)
+                WHERE (a_dev = $1 OR b_dev = $1)
+                  AND ($2::text IS NULL OR a_if = $2 OR b_if = $2)
                 
-                UNION
+                UNION ALL
                 
-                SELECT DISTINCT e.b_dev
+                SELECT DISTINCT 
+                    CASE 
+                        WHEN e.a_dev = d.device THEN e.b_dev
+                        ELSE e.a_dev
+                    END as device,
+                    d.depth + 1
                 FROM downstream d
-                JOIN vw_links_canonical e ON d.device = e.a_dev
-                WHERE e.b_dev != $1
+                JOIN vw_links_canonical e ON (d.device = e.a_dev OR d.device = e.b_dev)
+                WHERE CASE 
+                        WHEN e.a_dev = d.device THEN e.b_dev
+                        ELSE e.a_dev
+                      END != $1
+                  AND d.depth < 20
             )
-            SELECT device FROM downstream
+            SELECT DISTINCT device FROM downstream
         """
         
         rows = await conn.fetch(query, node, port)
