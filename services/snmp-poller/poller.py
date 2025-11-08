@@ -254,47 +254,49 @@ def snmp_lldp_neighbors(ip, community, port_map):
         return None
 
 def ssh_lldp_neighbors(ip, username, password, timeout=30):
+    import tempfile
     try:
-        ssh_cmd = f'ssh -o StrictHostKeyChecking=no -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedKeyTypes=+ssh-rsa -o ConnectTimeout=5 {username}@{ip}'
-        child = pexpect.spawn(ssh_cmd, timeout=timeout, maxread=4096)
+        expect_script = f"""#!/usr/bin/expect -f
+set timeout {timeout}
+spawn ssh -o StrictHostKeyChecking=no -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedKeyTypes=+ssh-rsa -o KexAlgorithms=+diffie-hellman-group-exchange-sha1,diffie-hellman-group14-sha1 -o ConnectTimeout=5 {username}@{ip}
+expect {{
+    "Press any key" {{send "\\r"; exp_continue}}
+    "Username:" {{send "{username}\\r"; exp_continue}}
+    "password:" {{send "{password}\\r"; exp_continue}}
+    "# " {{send ""}}
+    timeout {{exit 1}}
+}}
+sleep 0.5
+send "terminal length 0\\r"
+expect {{
+    "# " {{send ""}}
+    timeout {{exit 1}}
+}}
+sleep 0.5
+send "show lldp neighbors\\r"
+expect {{
+    "# " {{send ""}}
+    timeout {{exit 1}}
+}}
+send "exit\\r"
+expect eof
+"""
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.exp', delete=False) as f:
+            f.write(expect_script)
+            script_path = f.name
         
-        try:
-            i = child.expect(['Press any key', 'Username:', 'password:', '# ', pexpect.TIMEOUT, pexpect.EOF], timeout=5)
-            
-            if i == 0:
-                child.sendline('')
-                i = child.expect(['Username:', 'password:', '# ', pexpect.TIMEOUT, pexpect.EOF], timeout=3)
-            
-            if i in [0, 1]:
-                child.sendline(username)
-                i = child.expect(['password:', '# ', pexpect.TIMEOUT, pexpect.EOF], timeout=3)
-            
-            if i in [0, 1, 2]:
-                child.sendline(password)
-                i = child.expect(['# ', pexpect.TIMEOUT, pexpect.EOF], timeout=3)
-            
-            if i != 0:
-                child.close()
-                return None
-            
-            child.sendline('terminal length 0')
-            child.expect('# ', timeout=5)
-            
-            child.sendline('show lldp neighbors')
-            child.expect('# ', timeout=20)
-            output = child.before.decode('utf-8', errors='ignore')
-            
-            child.sendline('exit')
-            child.close()
-            
-            return output
-        except Exception as ex:
-            print(f"  SSH interaction error: {ex}", flush=True)
-            try:
-                child.close()
-            except:
-                pass
+        result = subprocess.run(['expect', script_path], capture_output=True, text=True, timeout=timeout)
+        os.remove(script_path)
+        
+        if result.returncode == 0 and result.stdout:
+            return result.stdout
+        else:
+            if result.stderr:
+                print(f"  SSH stderr: {result.stderr[:150]}", flush=True)
             return None
+    except subprocess.TimeoutExpired:
+        print(f"  SSH timeout for {ip}", flush=True)
+        return None
     except Exception as e:
         print(f"  SSH Error: {e}", flush=True)
         return None
