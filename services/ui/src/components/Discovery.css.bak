@@ -166,13 +166,8 @@
     border-bottom-color: #2563eb;
 }
 
-.scans-table {
-    overflow-x: auto;
-}
-
+.scans-table,
 .devices-table {
-    max-height: 500px;
-    overflow-y: auto;
     overflow-x: auto;
 }
 
@@ -182,15 +177,10 @@ table {
     font-size: 14px;
 }
 
-.devices-table thead {
+thead {
     background: #f9fafb;
     position: sticky;
     top: 0;
-    z-index: 1;
-}
-
-thead {
-    background: #f9fafb;
 }
 
 th {
@@ -213,22 +203,6 @@ tbody tr:hover {
 
 tbody tr.imported {
     background: #f0fdf4;
-}
-
-tbody tr.device-reachable {
-    background: #d1fae5;
-}
-
-tbody tr.device-reachable:hover {
-    background: #a7f3d0;
-}
-
-tbody tr.device-online {
-    background: #fef3c7;
-}
-
-tbody tr.device-online:hover {
-    background: #fde68a;
 }
 
 .status-badge {
@@ -265,11 +239,6 @@ tbody tr.device-online:hover {
     color: #065f46;
 }
 
-.status-online {
-    background: #fef3c7;
-    color: #92400e;
-}
-
 .status-unreachable {
     background: #fee2e2;
     color: #991b1b;
@@ -284,7 +253,6 @@ tbody tr.device-online:hover {
     display: flex;
     justify-content: flex-end;
     margin-bottom: 16px;
-    gap: 12px;
 }
 
 .devices-actions button {
@@ -308,14 +276,6 @@ tbody tr.device-online:hover {
     cursor: not-allowed;
 }
 
-.devices-actions .rescan-btn {
-    background: #2563eb;
-}
-
-.devices-actions .rescan-btn:hover:not(:disabled) {
-    background: #1d4ed8;
-}
-
 input[type="checkbox"] {
     width: 18px;
     height: 18px;
@@ -325,19 +285,4 @@ input[type="checkbox"] {
 input[type="checkbox"]:disabled {
     cursor: not-allowed;
     opacity: 0.5;
-}
-
-.rescan-status {
-    background: #fef3c7;
-    border: 2px solid #f59e0b;
-    border-radius: 4px;
-    padding: 12px 16px;
-    margin-bottom: 16px;
-    text-align: center;
-    font-weight: 500;
-    color: #92400e;
-}
-
-.rescan-status span {
-    font-size: 14px;
 }

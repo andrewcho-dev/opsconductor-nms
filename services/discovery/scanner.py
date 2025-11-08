@@ -27,6 +27,57 @@ SCAN_INTERVAL = int(os.getenv('SCAN_INTERVAL', '300'))
 class NetworkScanner:
     def __init__(self, db_conn):
         self.conn = db_conn
+        self.snmp_credentials = []
+        self.load_credentials()
+    
+    def load_credentials(self):
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("""
+                SELECT type, snmp_community, snmp_username, snmp_auth_protocol, snmp_auth_password,
+                       snmp_priv_protocol, snmp_priv_password
+                FROM credentials
+                WHERE enabled = TRUE
+                ORDER BY priority ASC
+            """)
+            rows = cursor.fetchall()
+            cursor.close()
+            
+            for row in rows:
+                cred_type, community, username, auth_proto, auth_pass, priv_proto, priv_pass = row
+                if community:
+                    self.snmp_credentials.append({
+                        'type': 'v2c',
+                        'community': community
+                    })
+                if username:
+                    self.snmp_credentials.append({
+                        'type': 'v3',
+                        'username': username,
+                        'auth_proto': auth_proto,
+                        'auth_pass': auth_pass,
+                        'priv_proto': priv_proto,
+                        'priv_pass': priv_pass
+                    })
+            
+            if self.snmp_credentials:
+                logger.info(f"Loaded {len(self.snmp_credentials)} SNMP credential(s)")
+            else:
+                logger.warning("No SNMP credentials found in database, using defaults")
+                self.snmp_credentials = [
+                    {'type': 'v2c', 'community': 'public'},
+                    {'type': 'v3', 'username': 'public'},
+                    {'type': 'v3', 'username': 'snmpuser'},
+                    {'type': 'v3', 'username': 'monitor'}
+                ]
+        except Exception as e:
+            logger.error(f"Error loading credentials: {e}")
+            self.snmp_credentials = [
+                {'type': 'v2c', 'community': 'public'},
+                {'type': 'v3', 'username': 'public'},
+                {'type': 'v3', 'username': 'snmpuser'},
+                {'type': 'v3', 'username': 'monitor'}
+            ]
         
     def ping_host(self, ip: str, timeout: int = 2) -> Tuple[bool, Optional[float]]:
         try:
@@ -71,11 +122,11 @@ class NetworkScanner:
         reachable, _ = self.check_tcp_port(ip, port, timeout=2)
         return reachable
     
-    def check_snmp(self, ip: str, community: str = 'public') -> Tuple[bool, Optional[str], Optional[str]]:
+    def check_snmp_v2c(self, ip: str, community: str = 'public') -> Tuple[bool, Optional[str], Optional[str]]:
         try:
             result = subprocess.run(
                 ['snmpget', '-v2c', '-c', community, '-t', '2', '-r', '1',
-                 str(ip), 'SNMPv2-MIB::sysDescr.0', 'SNMPv2-MIB::sysObjectID.0'],
+                 str(ip), '.1.3.6.1.2.1.1.1.0', '.1.3.6.1.2.1.1.2.0'],
                 capture_output=True,
                 text=True,
                 timeout=5
@@ -86,18 +137,75 @@ class NetworkScanner:
                 sys_descr = None
                 sys_oid = None
                 
-                for line in output.split('\n'):
-                    if 'sysDescr' in line:
-                        sys_descr = line.split('STRING:')[-1].strip() if 'STRING:' in line else None
-                    elif 'sysObjectID' in line:
-                        sys_oid = line.split('OID:')[-1].strip() if 'OID:' in line else None
+                lines = output.split('\n')
+                if len(lines) >= 1 and 'STRING:' in lines[0]:
+                    sys_descr = lines[0].split('STRING:')[-1].strip()
+                if len(lines) >= 2 and 'OID:' in lines[1]:
+                    sys_oid = lines[1].split('OID:')[-1].strip()
                 
                 return True, sys_descr, sys_oid
             
             return False, None, None
         except (subprocess.TimeoutExpired, Exception) as e:
-            logger.debug(f"SNMP check failed for {ip}: {e}")
+            logger.debug(f"SNMPv2c check failed for {ip}: {e}")
             return False, None, None
+    
+    def check_snmp_v3(self, ip: str, username: str = 'public', auth_proto: str = None, 
+                      auth_pass: str = None, priv_proto: str = None, priv_pass: str = None) -> Tuple[bool, Optional[str], Optional[str]]:
+        try:
+            cmd = ['snmpget', '-v3', '-l']
+            
+            if auth_proto and auth_pass and priv_proto and priv_pass:
+                cmd.extend(['authPriv', '-u', username, '-a', auth_proto, '-A', auth_pass, 
+                           '-x', priv_proto, '-X', priv_pass])
+            elif auth_proto and auth_pass:
+                cmd.extend(['authNoPriv', '-u', username, '-a', auth_proto, '-A', auth_pass])
+            else:
+                cmd.extend(['noAuthNoPriv', '-u', username])
+            
+            cmd.extend(['-t', '2', '-r', '1', str(ip), '.1.3.6.1.2.1.1.1.0', '.1.3.6.1.2.1.1.2.0'])
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            
+            if result.returncode == 0:
+                output = result.stdout
+                sys_descr = None
+                sys_oid = None
+                
+                lines = output.split('\n')
+                if len(lines) >= 1 and 'STRING:' in lines[0]:
+                    sys_descr = lines[0].split('STRING:')[-1].strip()
+                if len(lines) >= 2 and 'OID:' in lines[1]:
+                    sys_oid = lines[1].split('OID:')[-1].strip()
+                
+                return True, sys_descr, sys_oid
+            
+            return False, None, None
+        except (subprocess.TimeoutExpired, Exception) as e:
+            logger.debug(f"SNMPv3 check failed for {ip} with user {username}: {e}")
+            return False, None, None
+    
+    def check_snmp(self, ip: str, community: str = None) -> Tuple[bool, Optional[str], Optional[str], Optional[str]]:
+        for cred in self.snmp_credentials:
+            if cred['type'] == 'v2c':
+                snmp_ok, sys_descr, sys_oid = self.check_snmp_v2c(str(ip), cred['community'])
+                if snmp_ok:
+                    logger.debug(f"{ip} - SNMPv2c successful with community: {cred['community']}")
+                    return True, sys_descr, sys_oid, 'v2c'
+            elif cred['type'] == 'v3':
+                snmp_ok, sys_descr, sys_oid = self.check_snmp_v3(
+                    str(ip), 
+                    cred['username'],
+                    cred.get('auth_proto'),
+                    cred.get('auth_pass'),
+                    cred.get('priv_proto'),
+                    cred.get('priv_pass')
+                )
+                if snmp_ok:
+                    logger.debug(f"{ip} - SNMPv3 successful with username: {cred['username']}")
+                    return True, sys_descr, sys_oid, 'v3'
+        
+        return False, None, None, None
     
     def probe_device(self, ip: str, credential_ids: List[int] = None) -> Dict:
         logger.info(f"Probing {ip}...")
@@ -134,10 +242,10 @@ class NetworkScanner:
         https_ok = self.check_https(str(ip))
         result['https_reachable'] = https_ok
         
-        snmp_ok, sys_descr, sys_oid = self.check_snmp(str(ip))
+        snmp_ok, sys_descr, sys_oid, snmp_version = self.check_snmp(str(ip))
         result['snmp_reachable'] = snmp_ok
         if snmp_ok:
-            result['snmp_version'] = 'v2c'
+            result['snmp_version'] = snmp_version
             result['snmp_sys_descr'] = sys_descr
             result['snmp_sys_object_id'] = sys_oid
             
@@ -154,12 +262,15 @@ class NetworkScanner:
                 elif 'linux' in sys_descr_lower:
                     result['vendor'] = 'Linux'
         
+        
         if ssh_ok or snmp_ok or https_ok:
             result['discovery_status'] = 'reachable'
+        elif ping_ok:
+            result['discovery_status'] = 'online'
         else:
             result['discovery_status'] = 'unreachable'
         
-        logger.info(f"{ip} - Status: {result['discovery_status']} (SSH:{ssh_ok}, SNMP:{snmp_ok}, HTTPS:{https_ok})")
+        logger.info(f"{ip} - Status: {result['discovery_status']} (Ping:{ping_ok}, SSH:{ssh_ok}, SNMP:{snmp_ok}, HTTPS:{https_ok})")
         return result
     
     def scan_network(self, network_cidr: str, scan_id: int):
@@ -234,7 +345,9 @@ class NetworkScanner:
                     scan_id
                 ))
                 
-                devices_found += 1
+                
+                if device_info['discovery_status'] in ['online', 'reachable']:
+                    devices_found += 1
                 if device_info['discovery_status'] == 'reachable':
                     devices_reachable += 1
                 
@@ -257,6 +370,80 @@ class NetworkScanner:
         cursor.close()
         
         logger.info(f"Scan {scan_id} completed: {devices_found} found, {devices_reachable} reachable")
+
+
+    def process_rescan_requests(self):
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT ip FROM discovered_devices 
+            WHERE rescan_requested = TRUE 
+            LIMIT 10
+        """)
+        
+        rescan_ips = cursor.fetchall()
+        cursor.close()
+        
+        if not rescan_ips:
+            return 0
+        
+        logger.info(f"Processing {len(rescan_ips)} rescan requests")
+        rescanned_count = 0
+        
+        for (ip,) in rescan_ips:
+            try:
+                import ipaddress
+                device_info = self.probe_device(ipaddress.ip_address(ip))
+                
+                cursor = self.conn.cursor()
+                cursor.execute("""
+                    UPDATE discovered_devices SET
+                        vendor = %s,
+                        ping_reachable = %s,
+                        ping_rtt_ms = %s,
+                        ping_last_checked = NOW(),
+                        ssh_reachable = %s,
+                        ssh_banner = %s,
+                        ssh_last_checked = NOW(),
+                        snmp_reachable = %s,
+                        snmp_version = %s,
+                        snmp_sys_descr = %s,
+                        snmp_sys_object_id = %s,
+                        snmp_last_checked = NOW(),
+                        https_reachable = %s,
+                        https_last_checked = NOW(),
+                        discovery_status = %s,
+                        last_probed = NOW(),
+                        rescan_requested = FALSE
+                    WHERE ip = %s
+                """, (
+                    device_info.get('vendor'),
+                    device_info['ping_reachable'],
+                    device_info['ping_rtt_ms'],
+                    device_info['ssh_reachable'],
+                    device_info['ssh_banner'],
+                    device_info['snmp_reachable'],
+                    device_info['snmp_version'],
+                    device_info['snmp_sys_descr'],
+                    device_info['snmp_sys_object_id'],
+                    device_info['https_reachable'],
+                    device_info['discovery_status'],
+                    str(ip)
+                ))
+                
+                self.conn.commit()
+                cursor.close()
+                rescanned_count += 1
+                logger.info(f"Rescanned {ip}: {device_info['discovery_status']}")
+                
+            except Exception as e:
+                logger.error(f"Error rescanning {ip}: {e}")
+                cursor = self.conn.cursor()
+                cursor.execute("UPDATE discovered_devices SET rescan_requested = FALSE WHERE ip = %s", (str(ip),))
+                self.conn.commit()
+                cursor.close()
+                continue
+        
+        return rescanned_count
 
 def get_db():
     return psycopg2.connect(
@@ -285,6 +472,11 @@ def main():
             
             scan = cursor.fetchone()
             cursor.close()
+            
+            # Check for rescan requests first
+            rescan_count = scanner.process_rescan_requests()
+            if rescan_count > 0:
+                logger.info(f"Processed {rescan_count} rescan requests")
             
             if scan:
                 scan_id, network_cidr = scan

@@ -4,6 +4,7 @@ import PortDrillDown from './components/PortDrillDown'
 import PathQuery from './components/PathQuery'
 import ImpactAnalysis from './components/ImpactAnalysis'
 import Discovery from './components/Discovery'
+import Settings from './components/Settings'
 import './App.css'
 
 function App() {
@@ -45,6 +46,12 @@ function App() {
           >
             Path Query
           </button>
+          <button 
+            className={activePanel === 'settings' ? 'active' : ''} 
+            onClick={() => setActivePanel('settings')}
+          >
+            Settings
+          </button>
         </nav>
       </header>
       <main className="main">
@@ -71,6 +78,11 @@ function App() {
         {activePanel === 'path' && (
           <div className="panel-container">
             <PathQuery />
+          </div>
+        )}
+        {activePanel === 'settings' && (
+          <div className="panel-container">
+            <Settings />
           </div>
         )}
       </main>

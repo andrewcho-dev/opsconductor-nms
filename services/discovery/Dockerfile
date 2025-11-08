@@ -6,6 +6,7 @@ RUN apt-get update && apt-get install -y \
     nmap \
     iputils-ping \
     postgresql-client \
+    snmp \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

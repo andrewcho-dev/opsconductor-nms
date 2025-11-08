@@ -233,6 +233,55 @@ class TopologyNormalizer:
         rows_inserted = cursor.rowcount
         self.conn.commit()
         logger.info(f"Created/updated {rows_inserted} edges from MAC correlation")
+        
+        cursor.execute("""
+            WITH all_learned_macs AS (
+                SELECT DISTINCT
+                    host(d.mgmt_ip) as switch_ip,
+                    m.ifname as switch_port,
+                    m.mac_addr,
+                    m.device as switch_device
+                FROM facts_mac m
+                JOIN devices d ON d.name = m.device
+                WHERE m.collected_at > NOW() - INTERVAL '1 hour'
+                  AND d.mgmt_ip IS NOT NULL
+            ),
+            arp_mappings AS (
+                SELECT DISTINCT
+                    a.mac_addr,
+                    host(a.ip_addr) as ip_addr
+                FROM facts_arp a
+                WHERE a.collected_at > NOW() - INTERVAL '1 hour'
+                  AND NOT (a.ip_addr <<= '169.254.0.0/16'::inet)
+            )
+            INSERT INTO edges (a_dev, a_if, b_dev, b_if, method, confidence, evidence, first_seen, last_seen)
+            SELECT DISTINCT
+                am.ip_addr as a_dev,
+                'mac-learned' as a_if,
+                lm.switch_ip as b_dev,
+                lm.switch_port as b_if,
+                'mac_arp' as method,
+                0.75 as confidence,
+                jsonb_build_object(
+                    'source', 'switch_learned_mac',
+                    'device_mac', lm.mac_addr::text,
+                    'switch_ip', lm.switch_ip,
+                    'switch_port', lm.switch_port
+                ) as evidence,
+                NOW() as first_seen,
+                NOW() as last_seen
+            FROM all_learned_macs lm
+            JOIN arp_mappings am ON lm.mac_addr = am.mac_addr
+            WHERE am.ip_addr != lm.switch_ip
+            ON CONFLICT (a_dev, a_if, b_dev, b_if) DO UPDATE SET
+                last_seen = EXCLUDED.last_seen,
+                confidence = GREATEST(edges.confidence, EXCLUDED.confidence),
+                evidence = EXCLUDED.evidence
+        """)
+        
+        rows_inserted2 = cursor.rowcount
+        self.conn.commit()
+        logger.info(f"Created/updated {rows_inserted2} edges from learned MAC addresses on switches")
         cursor.close()
     
     def compute_edges_from_arp_correlation(self):
@@ -263,6 +312,8 @@ class TopologyNormalizer:
                 SELECT DISTINCT device FROM facts_mac
                 UNION
                 SELECT DISTINCT device FROM facts_lldp
+                UNION
+                SELECT DISTINCT device FROM facts_arp
             )
             INSERT INTO edges (a_dev, a_if, b_dev, b_if, method, confidence, evidence, first_seen, last_seen)
             SELECT DISTINCT
@@ -437,16 +488,70 @@ class TopologyNormalizer:
         logger.info(f"Created {rows_inserted} IP device nodes")
         cursor.close()
     
+    def compute_edges_from_poller_lldp(self):
+        """Process LLDP facts collected directly by the poller."""
+        logger.info("Computing edges from poller LLDP facts...")
+        cursor = self.conn.cursor()
+        
+        cursor.execute("""
+            WITH resolved_lldp AS (
+                SELECT
+                    fl.device as a_dev,
+                    fl.ifname as a_if,
+                    fl.peer_device as b_dev,
+                    fl.peer_ifname as b_if,
+                    fl.collected_at,
+                    fl.protocol_payload,
+                    1.0 as confidence
+                FROM facts_lldp fl
+                WHERE fl.collected_at > NOW() - INTERVAL '1 hour'
+                  AND fl.peer_device IS NOT NULL
+                  AND fl.peer_device IN (SELECT name FROM devices)
+            ),
+            latest_lldp AS (
+                SELECT DISTINCT ON (a_dev, a_if, b_dev, b_if)
+                    a_dev, a_if, b_dev, b_if, collected_at, protocol_payload, confidence
+                FROM resolved_lldp
+                ORDER BY a_dev, a_if, b_dev, b_if, collected_at DESC
+            )
+            INSERT INTO edges (a_dev, a_if, b_dev, b_if, method, confidence, evidence, first_seen, last_seen)
+            SELECT
+                a_dev,
+                a_if,
+                b_dev,
+                b_if,
+                'lldp' as method,
+                confidence,
+                jsonb_build_object(
+                    'source', 'poller_lldp',
+                    'collected_at', collected_at,
+                    'payload', protocol_payload
+                ) as evidence,
+                collected_at as first_seen,
+                collected_at as last_seen
+            FROM latest_lldp
+            ON CONFLICT (a_dev, a_if, b_dev, b_if) DO UPDATE SET 
+                last_seen = EXCLUDED.last_seen, 
+                confidence = EXCLUDED.confidence, 
+                evidence = EXCLUDED.evidence
+        """)
+        
+        rows_inserted = cursor.rowcount
+        self.conn.commit()
+        logger.info(f"Created/updated {rows_inserted} edges from poller LLDP facts")
+        cursor.close()
+    
     def run_cycle(self):
         try:
             self.update_devices()
             self.update_interfaces()
             self.process_lldp_facts()
             self.ensure_lldp_peer_nodes()
+            self.compute_edges_from_poller_lldp()
             self.compute_edges_from_lldp()
             self.compute_edges_from_mac_correlation()
+            self.compute_edges_from_arp_correlation()
             self.ensure_ip_device_nodes()
-#            self.compute_edges_from_arp_correlation()
             logger.info("Normalization cycle completed")
         except Exception as e:
             logger.error(f"Error during normalization cycle: {e}", exc_info=True)

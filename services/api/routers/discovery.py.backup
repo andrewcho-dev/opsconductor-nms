@@ -41,10 +41,8 @@ class DeviceImport(BaseModel):
     import_to_suzieq: bool = False
     import_to_snmp_poller: bool = False
 
-class PollingConfig(BaseModel):
-    snmp_polling_enabled: Optional[bool] = None
-    polling_enabled: Optional[bool] = None
-    snmp_credential_id: Optional[int] = None
+class RescanRequest(BaseModel):
+    ips: List[str]
 
 @router.post("/scan")
 async def start_scan(scan: ScanRequest, conn=Depends(get_db)):
@@ -196,8 +194,7 @@ async def import_devices(import_req: DeviceImport, conn=Depends(get_db)):
     for ip in import_req.ips:
         try:
             cursor.execute("""
-                SELECT ip, hostname, vendor, model, os_version, snmp_reachable, ssh_reachable,
-                       snmp_credential_id, ssh_credential_id
+                SELECT ip, hostname, vendor, model, os_version, snmp_reachable, ssh_reachable
                 FROM discovered_devices
                 WHERE ip = %s AND discovery_status = 'reachable'
             """, (ip,))
@@ -208,19 +205,13 @@ async def import_devices(import_req: DeviceImport, conn=Depends(get_db)):
                 continue
             
             cursor.execute("""
-                INSERT INTO devices (name, mgmt_ip, vendor, model, os_version, role, site,
-                                    polling_enabled, snmp_polling_enabled,
-                                    snmp_credential_id, ssh_credential_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO devices (name, mgmt_ip, vendor, model, os_version, role, site)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (name) DO UPDATE SET
                     mgmt_ip = EXCLUDED.mgmt_ip,
                     vendor = EXCLUDED.vendor,
                     model = EXCLUDED.model,
                     os_version = EXCLUDED.os_version,
-                    polling_enabled = EXCLUDED.polling_enabled,
-                    snmp_polling_enabled = EXCLUDED.snmp_polling_enabled,
-                    snmp_credential_id = EXCLUDED.snmp_credential_id,
-                    ssh_credential_id = EXCLUDED.ssh_credential_id,
                     last_seen = NOW()
             """, (
                 str(device['ip']),
@@ -229,11 +220,7 @@ async def import_devices(import_req: DeviceImport, conn=Depends(get_db)):
                 device['model'] or 'Unknown',
                 device['os_version'] or 'Unknown',
                 'discovered',
-                'default',
-                import_req.import_to_snmp_poller,
-                import_req.import_to_snmp_poller,
-                device['snmp_credential_id'],
-                device['ssh_credential_id']
+                'default'
             ))
             
             cursor.execute("""
@@ -257,6 +244,41 @@ async def import_devices(import_req: DeviceImport, conn=Depends(get_db)):
     return {
         "imported_count": imported_count,
         "errors": errors
+    }
+
+
+@router.post("/devices/rescan")
+async def rescan_devices(rescan_req: RescanRequest, conn=Depends(get_db)):
+    cursor = conn.cursor()
+    
+    rescanned_count = 0
+    errors = []
+    
+    for ip in rescan_req.ips:
+        try:
+            cursor.execute("""
+                UPDATE discovered_devices
+                SET rescan_requested = TRUE
+                WHERE ip = %s
+            """, (ip,))
+            
+            if cursor.rowcount > 0:
+                rescanned_count += 1
+            else:
+                errors.append(f"{ip}: Device not found")
+                
+        except Exception as e:
+            errors.append(f"{ip}: {str(e)}")
+            conn.rollback()
+            continue
+    
+    conn.commit()
+    cursor.close()
+    
+    return {
+        "rescanned_count": rescanned_count,
+        "errors": errors,
+        "message": f"Rescan requested for {rescanned_count} device(s)"
     }
 
 @router.delete("/devices/{ip}")
@@ -334,120 +356,6 @@ async def delete_credential(cred_id: int, conn=Depends(get_db)):
         raise HTTPException(status_code=404, detail="Credential not found")
     
     return {"status": "deleted", "id": cred_id}
-
-@router.put("/devices/{device_name}/polling")
-async def update_device_polling(device_name: str, config: PollingConfig, conn=Depends(get_db)):
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
-    
-    try:
-        cursor.execute("SELECT name FROM devices WHERE name = %s", (device_name,))
-        if not cursor.fetchone():
-            raise HTTPException(status_code=404, detail="Device not found")
-        
-        updates = []
-        params = []
-        
-        if config.snmp_polling_enabled is not None:
-            updates.append("snmp_polling_enabled = %s")
-            params.append(config.snmp_polling_enabled)
-        
-        if config.polling_enabled is not None:
-            updates.append("polling_enabled = %s")
-            params.append(config.polling_enabled)
-        
-        if config.snmp_credential_id is not None:
-            updates.append("snmp_credential_id = %s")
-            params.append(config.snmp_credential_id)
-        
-        if not updates:
-            raise HTTPException(status_code=400, detail="No configuration provided")
-        
-        params.append(device_name)
-        
-        query = f"UPDATE devices SET {', '.join(updates)} WHERE name = %s"
-        cursor.execute(query, params)
-        conn.commit()
-        
-        cursor.execute("SELECT * FROM devices WHERE name = %s", (device_name,))
-        updated_device = cursor.fetchone()
-        cursor.close()
-        
-        return {
-            "name": updated_device['name'],
-            "polling_enabled": updated_device['polling_enabled'],
-            "snmp_polling_enabled": updated_device['snmp_polling_enabled'],
-            "snmp_credential_id": updated_device['snmp_credential_id']
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        conn.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
-    finally:
-        cursor.close()
-
-@router.post("/devices/polling/enable-by-network")
-async def enable_polling_by_network(network_cidr: str, snmp_credential_id: Optional[int] = None, conn=Depends(get_db)):
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
-    
-    try:
-        query = """
-            UPDATE devices 
-            SET snmp_polling_enabled = TRUE, polling_enabled = TRUE
-        """
-        params = []
-        
-        if snmp_credential_id:
-            query += ", snmp_credential_id = %s"
-            params.append(snmp_credential_id)
-        
-        query += " WHERE mgmt_ip << %s RETURNING name, mgmt_ip"
-        params.append(network_cidr)
-        
-        cursor.execute(query, params)
-        updated_devices = cursor.fetchall()
-        conn.commit()
-        
-        return {
-            "updated_count": len(updated_devices),
-            "devices": [{"name": d['name'], "mgmt_ip": str(d['mgmt_ip'])} for d in updated_devices]
-        }
-    except Exception as e:
-        conn.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
-    finally:
-        cursor.close()
-
-@router.post("/devices/polling/enable-by-ips")
-async def enable_polling_by_ips(ips: List[str], snmp_credential_id: Optional[int] = None, conn=Depends(get_db)):
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
-    
-    try:
-        query = """
-            UPDATE devices 
-            SET snmp_polling_enabled = TRUE, polling_enabled = TRUE
-        """
-        params = [tuple(ips)]
-        
-        if snmp_credential_id:
-            query += ", snmp_credential_id = %s"
-            params.insert(0, snmp_credential_id)
-        
-        query += " WHERE mgmt_ip::text = ANY(%s) RETURNING name, mgmt_ip"
-        
-        cursor.execute(query, params)
-        updated_devices = cursor.fetchall()
-        conn.commit()
-        
-        return {
-            "updated_count": len(updated_devices),
-            "devices": [{"name": d['name'], "mgmt_ip": str(d['mgmt_ip'])} for d in updated_devices]
-        }
-    except Exception as e:
-        conn.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
-    finally:
-        cursor.close()
 
 @router.get("/summary")
 async def get_discovery_summary(conn=Depends(get_db)):

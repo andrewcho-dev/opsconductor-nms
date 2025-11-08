@@ -253,10 +253,10 @@ def snmp_lldp_neighbors(ip, community, port_map):
         print(f"  SNMP LLDP Error: {e}", flush=True)
         return None
 
-def ssh_lldp_neighbors(ip, username, password, timeout=30):
+def ssh_lldp_neighbors(ip, username, password, timeout=15):
     try:
         ssh_cmd = f'ssh -o StrictHostKeyChecking=no -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedKeyTypes=+ssh-rsa -o ConnectTimeout=5 {username}@{ip}'
-        child = pexpect.spawn(ssh_cmd, timeout=timeout, maxread=4096)
+        child = pexpect.spawn(ssh_cmd, timeout=timeout)
         
         try:
             i = child.expect(['Press any key', 'Username:', 'password:', '# ', pexpect.TIMEOUT, pexpect.EOF], timeout=5)
@@ -281,7 +281,7 @@ def ssh_lldp_neighbors(ip, username, password, timeout=30):
             child.expect('# ', timeout=5)
             
             child.sendline('show lldp neighbors')
-            child.expect('# ', timeout=20)
+            child.expect('# ', timeout=10)
             output = child.before.decode('utf-8', errors='ignore')
             
             child.sendline('exit')
@@ -322,7 +322,7 @@ def parse_lldp_table_format(output, local_device, source='ssh_lldp'):
                 local_if = parts[0]
                 chassis_id = parts[1]
                 port_id = parts[2]
-                system_name = parts[3] if len(parts) > 3 else ''
+                system_name = parts[3]
                 
                 if local_if and chassis_id:
                     neighbors.append({
@@ -449,8 +449,6 @@ def poll_device(device):
                 if lldp_output:
                     lldp_neighbors = parse_lldp_neighbors(lldp_output, device['hostname'], source='ssh_lldp')
                     print(f"  Found {len(lldp_neighbors)} LLDP neighbors via SSH", flush=True)
-                else:
-                    print(f"  SSH returned no output for LLDP", flush=True)
             else:
                 print(f"  SSH credentials not available for LLDP collection", flush=True)
         

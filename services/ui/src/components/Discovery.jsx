@@ -9,11 +9,12 @@ const Discovery = () => {
     const [selectedDevices, setSelectedDevices] = useState([]);
     const [activeTab, setActiveTab] = useState('scans');
     const [loading, setLoading] = useState(false);
+    const [rescanning, setRescanning] = useState(false);
     const [error, setError] = useState(null);
 
     const fetchScans = async () => {
         try {
-            const response = await fetch('http://localhost:8080/discovery/scans');
+            const response = await fetch('/api/discovery/scans');
             const data = await response.json();
             setScans(data);
         } catch (err) {
@@ -23,7 +24,7 @@ const Discovery = () => {
 
     const fetchDevices = async () => {
         try {
-            const response = await fetch('http://localhost:8080/discovery/devices?limit=500');
+            const response = await fetch('/api/discovery/devices?limit=500');
             const data = await response.json();
             setDevices(data);
         } catch (err) {
@@ -53,7 +54,7 @@ const Discovery = () => {
         setError(null);
 
         try {
-            const response = await fetch('http://localhost:8080/discovery/scan', {
+            const response = await fetch('/api/discovery/scan', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -90,7 +91,7 @@ const Discovery = () => {
         setError(null);
 
         try {
-            const response = await fetch('http://localhost:8080/discovery/devices/import', {
+            const response = await fetch('/api/discovery/devices/import', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -110,6 +111,49 @@ const Discovery = () => {
             }
         } catch (err) {
             setError('Error importing devices: ' + err.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const rescanDevices = async () => {
+        if (selectedDevices.length === 0) {
+            setError('Please select devices to rescan');
+            return;
+        }
+
+        setLoading(true);
+        setRescanning(true);
+        setError(null);
+
+        try {
+            const response = await fetch('/api/discovery/devices/rescan', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    ips: selectedDevices
+                })
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                setSelectedDevices([]);
+                setLoading(false);
+                
+                setTimeout(() => {
+                    fetchDevices();
+                }, 3000);
+                
+                setTimeout(() => {
+                    setRescanning(false);
+                }, 10000);
+            } else {
+                setError('Failed to request rescan');
+                setRescanning(false);
+            }
+        } catch (err) {
+            setError('Error requesting rescan: ' + err.message);
+            setRescanning(false);
         } finally {
             setLoading(false);
         }
@@ -163,7 +207,7 @@ const Discovery = () => {
                                     className={activeTab === 'devices' ? 'active' : ''}
                                     onClick={() => setActiveTab('devices')}
                                 >
-                                    Discovered Devices ({devices.length})
+                                    Discovered Devices ({devices.filter(d => d.discovery_status === 'reachable' || d.discovery_status === 'online').length})
                                 </button>
                             </div>
 
@@ -202,12 +246,24 @@ const Discovery = () => {
 
                             {activeTab === 'devices' && (
                                 <div className="devices-section">
+                                    {rescanning && (
+                                        <div className="rescan-status">
+                                            <span>⏳ Rescanning devices... Results will update shortly.</span>
+                                        </div>
+                                    )}
                                     <div className="devices-actions">
                                         <button
                                             onClick={importDevices}
                                             disabled={selectedDevices.length === 0 || loading}
                                         >
                                             Import Selected ({selectedDevices.length})
+                                        </button>
+                                        <button
+                                            onClick={rescanDevices}
+                                            disabled={selectedDevices.length === 0 || loading}
+                                            className="rescan-btn"
+                                        >
+                                            {loading ? 'Rescanning...' : `Rescan Selected (${selectedDevices.length})`}
                                         </button>
                                     </div>
 
@@ -222,7 +278,7 @@ const Discovery = () => {
                                                                 if (e.target.checked) {
                                                                     setSelectedDevices(
                                                                         devices
-                                                                            .filter(d => d.discovery_status === 'reachable' && !d.imported)
+                                                                            .filter(d => (d.discovery_status === 'reachable' || d.discovery_status === 'online') && !d.imported)
                                                                             .map(d => d.ip)
                                                                     );
                                                                 } else {
@@ -244,13 +300,13 @@ const Discovery = () => {
                                             </thead>
                                             <tbody>
                                                 {devices.map(device => (
-                                                    <tr key={device.ip} className={device.imported ? 'imported' : ''}>
+                                                    <tr key={device.ip} className={device.imported ? 'imported' : device.discovery_status === 'reachable' ? 'device-reachable' : device.discovery_status === 'online' ? 'device-online' : ''}>
                                                         <td>
                                                             <input
                                                                 type="checkbox"
                                                                 checked={selectedDevices.includes(device.ip)}
                                                                 onChange={() => toggleDeviceSelection(device.ip)}
-                                                                disabled={device.imported || device.discovery_status !== 'reachable'}
+                                                                disabled={device.imported || (device.discovery_status !== 'reachable' && device.discovery_status !== 'online')}
                                                             />
                                                         </td>
                                                         <td>{device.ip}</td>

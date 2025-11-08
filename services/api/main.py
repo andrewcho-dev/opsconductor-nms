@@ -5,7 +5,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 import os
 import asyncpg
-from routers import topology, sflow, netbox, discovery
+from routers import topology, sflow, netbox, discovery, settings
 
 limiter = Limiter(key_func=get_remote_address, default_limits=["100/minute"])
 
@@ -30,6 +30,7 @@ app.include_router(topology.router)
 app.include_router(sflow.router)
 app.include_router(netbox.router)
 app.include_router(discovery.router)
+app.include_router(settings.router)
 
 db_pool = None
 
