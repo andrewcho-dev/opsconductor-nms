@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useCallback } from 'react'
 import TopologyMap from './components/TopologyMap'
 import PortDrillDown from './components/PortDrillDown'
 import PathQuery from './components/PathQuery'
@@ -10,15 +10,15 @@ function App() {
   const [selectedNode, setSelectedNode] = useState(null)
   const [activePanel, setActivePanel] = useState('topology')
 
-  const handleEdgeSelect = (edge) => {
+  const handleEdgeSelect = useCallback((edge) => {
     setSelectedEdge(edge)
     setSelectedNode(null)
-  }
+  }, [])
 
-  const handleNodeSelect = (node) => {
+  const handleNodeSelect = useCallback((node) => {
     setSelectedNode(node)
     setSelectedEdge(null)
-  }
+  }, [])
 
   const handleClosePanel = () => {
     setSelectedEdge(null)

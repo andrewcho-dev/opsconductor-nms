@@ -1,0 +1,7 @@
+Host 10.121.19.21
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+
+Host *
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null

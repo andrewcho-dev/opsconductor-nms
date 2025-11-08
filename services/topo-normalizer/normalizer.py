@@ -133,7 +133,7 @@ class TopologyNormalizer:
             FROM latest_lldp ll
             LEFT JOIN hostname_mappings hm1 ON ll.device = hm1.hostname
             LEFT JOIN hostname_mappings hm2 ON ll.peer_device = hm2.hostname
-            ON CONFLICT (edge_id) DO NOTHING
+            ON CONFLICT (a_dev, a_if, b_dev, b_if) DO UPDATE SET last_seen = EXCLUDED.last_seen, confidence = EXCLUDED.confidence, evidence = EXCLUDED.evidence
         """)
         
         rows_inserted = cursor.rowcount
@@ -142,6 +142,117 @@ class TopologyNormalizer:
         
         cursor.close()
     
+    
+    def compute_edges_from_mac_correlation(self):
+        """Map IP addresses to switch ports using ARP+MAC tables."""
+        logger.info("Computing edges from MAC correlation...")
+        cursor = self.conn.cursor()
+        
+        cursor.execute("""
+            WITH switch_ports AS (
+                SELECT DISTINCT
+                    host(d.mgmt_ip) as switch_ip,
+                    host(a.ip_addr) as device_ip,
+                    a.mac_addr,
+                    m.ifname as switch_port
+                FROM facts_arp a
+                JOIN facts_mac m ON a.mac_addr = m.mac_addr AND a.device = m.device
+                JOIN devices d ON d.name = a.device
+                WHERE a.collected_at > NOW() - INTERVAL '1 hour'
+                  AND m.collected_at > NOW() - INTERVAL '1 hour'
+                  AND NOT (a.ip_addr <<= '169.254.0.0/16'::inet)
+                  AND d.mgmt_ip IS NOT NULL
+            )
+            INSERT INTO edges (a_dev, a_if, b_dev, b_if, method, confidence, evidence, first_seen, last_seen)
+            SELECT DISTINCT
+                sp.device_ip as a_dev,
+                'arp-inferred' as a_if,
+                sp.switch_ip as b_dev,
+                sp.switch_port as b_if,
+                'mac_arp' as method,
+                0.9 as confidence,
+                jsonb_build_object(
+                    'source', 'switch_arp_mac',
+                    'device_ip', sp.device_ip,
+                    'device_mac', sp.mac_addr::text,
+                    'switch_ip', sp.switch_ip,
+                    'switch_port', sp.switch_port
+                ) as evidence,
+                NOW() as first_seen,
+                NOW() as last_seen
+            FROM switch_ports sp
+            WHERE sp.device_ip != sp.switch_ip
+            ON CONFLICT (a_dev, a_if, b_dev, b_if) DO UPDATE SET
+                last_seen = EXCLUDED.last_seen,
+                confidence = GREATEST(edges.confidence, EXCLUDED.confidence),
+                evidence = EXCLUDED.evidence
+        """)
+
+        rows_inserted = cursor.rowcount
+        self.conn.commit()
+        logger.info(f"Created/updated {rows_inserted} edges from MAC correlation")
+        cursor.close()
+    
+    def compute_edges_from_arp_correlation(self):
+        """
+        Infer edges by matching ARP entries to known devices.
+        Devices appearing in 2+ ARP tables are treated as infrastructure.
+        """
+        logger.info("Computing edges from ARP correlation...")
+        cursor = self.conn.cursor()
+        
+        cursor.execute("""
+            WITH device_ips AS (
+                SELECT DISTINCT ON (ip) device, ip
+                FROM (
+                    SELECT DISTINCT i.device, host(i.l3_addr)::inet as ip
+                    FROM interfaces i
+                    WHERE i.l3_addr IS NOT NULL
+                    UNION
+                    SELECT DISTINCT d.name as device, d.mgmt_ip as ip
+                    FROM devices d
+                    WHERE d.mgmt_ip IS NOT NULL
+                ) sub
+                ORDER BY ip, 
+                    CASE WHEN device ~ '^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$' THEN 1 ELSE 0 END,
+                    device
+            ),
+            infra_devices AS (
+                SELECT DISTINCT device FROM facts_mac
+                UNION
+                SELECT DISTINCT device FROM facts_lldp
+            )
+            INSERT INTO edges (a_dev, a_if, b_dev, b_if, method, confidence, evidence, first_seen, last_seen)
+            SELECT DISTINCT
+                a.device as a_dev,
+                COALESCE(a.ifname, 'arp-inferred') as a_if,
+                d.device as b_dev,
+                'arp-inferred' as b_if,
+                'mac_arp' as method,
+                0.6 as confidence,
+                jsonb_build_object(
+                    'source', 'arp_to_device',
+                    'matched_ip', a.ip_addr::text,
+                    'matched_mac', a.mac_addr::text
+                ) as evidence,
+                NOW() as first_seen,
+                NOW() as last_seen
+            FROM facts_arp a
+            JOIN device_ips d ON a.ip_addr = d.ip
+            WHERE a.device != d.device
+                AND d.device IN (SELECT device FROM infra_devices)
+                AND a.collected_at > NOW() - INTERVAL '1 hour'
+            ON CONFLICT (a_dev, a_if, b_dev, b_if) DO UPDATE SET
+                last_seen = EXCLUDED.last_seen,
+                confidence = GREATEST(edges.confidence, EXCLUDED.confidence),
+                evidence = EXCLUDED.evidence
+        """)
+        
+        rows_inserted = cursor.rowcount
+        self.conn.commit()
+        logger.info(f"Created/updated {rows_inserted} edges from ARP correlation")
+        cursor.close()
+
     def update_devices(self):
         logger.info("Updating devices...")
         data = self.fetch_suzieq_data("device")
@@ -240,6 +351,34 @@ class TopologyNormalizer:
         
         cursor.close()
     
+    def ensure_ip_device_nodes(self):
+        """Create device nodes for IP addresses referenced in mac_arp edges."""
+        logger.info("Creating nodes for IP devices from edges...")
+        cursor = self.conn.cursor()
+        
+        cursor.execute("""
+            INSERT INTO devices (name, vendor, model, os_version, role, site)
+            SELECT DISTINCT a_dev, 'Unknown', 'Unknown', 'Unknown', 'endpoint', 'default'
+            FROM edges
+            WHERE method = 'mac_arp' 
+              AND a_dev NOT IN (SELECT name FROM devices)
+            ON CONFLICT (name) DO NOTHING
+        """)
+        
+        cursor.execute("""
+            INSERT INTO devices (name, vendor, model, os_version, role, site, mgmt_ip)
+            SELECT DISTINCT b_dev, 'Unknown', 'Switch', 'Unknown', 'switch', 'default', b_dev::inet
+            FROM edges
+            WHERE method = 'mac_arp' 
+              AND b_dev NOT IN (SELECT name FROM devices)
+            ON CONFLICT (name) DO NOTHING
+        """)
+        
+        rows_inserted = cursor.rowcount
+        self.conn.commit()
+        logger.info(f"Created {rows_inserted} IP device nodes")
+        cursor.close()
+    
     def run_cycle(self):
         try:
             self.update_devices()
@@ -247,6 +386,9 @@ class TopologyNormalizer:
             self.process_lldp_facts()
             self.ensure_lldp_peer_nodes()
             self.compute_edges_from_lldp()
+            self.compute_edges_from_mac_correlation()
+            self.ensure_ip_device_nodes()
+#            self.compute_edges_from_arp_correlation()
             logger.info("Normalization cycle completed")
         except Exception as e:
             logger.error(f"Error during normalization cycle: {e}", exc_info=True)

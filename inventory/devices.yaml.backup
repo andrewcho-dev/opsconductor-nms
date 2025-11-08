@@ -6,7 +6,7 @@ sources:
   - url: ssh://admin:Metrolink222@10.120.0.29
   - url: ssh://admin:Metrolink222@10.120.0.30
   - url: ssh://admin:Metrolink222@10.121.19.1 devtype=iosxe
-  - url: ssh://root:Metrolink222@10.121.19.21
+  - url: ssh://root:Metrolink222@10.121.19.21 devtype=linux
   - url: ssh://root:Metrolink202@10.121.19.104 devtype=linux
   - url: ssh://admin:Metrolink222@10.121.19.71 devtype=iosxe
   - url: ssh://root:Metrolink202@10.121.19.101 devtype=linux

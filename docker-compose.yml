@@ -15,13 +15,15 @@ services:
       - |
         mkdir -p ~/.suzieq
         cp /inventory/sq.yaml ~/.suzieq/suzieq-cfg.yml
-        sq-poller -c ~/.suzieq/suzieq-cfg.yml -I /inventory/devices.yaml >/dev/null 2>&1 &
-        sq-rest-server --no-https
+        pip install --user --quiet --upgrade "asyncssh>=2.17" || true
+        sq-poller -c ~/.suzieq/suzieq-cfg.yml -I /inventory/devices.yaml --ssh-config-file /inventory/ssh_config &
+        sq-rest-server -c ~/.suzieq/suzieq-cfg.yml --no-https
 
   topo-normalizer:
     build: ./services/topo-normalizer
     environment:
       - SUZIEQ_URL=http://localhost:8000
+      - PG_DSN=postgresql://oc:oc@localhost/opsconductor
     secrets:
       - db_user
       - db_password
@@ -31,8 +33,26 @@ services:
     network_mode: host
     restart: unless-stopped
 
+  snmp-poller:
+    build: ./services/snmp-poller
+    environment:
+      - DB_HOST=localhost
+      - DB_NAME=opsconductor
+      - DB_USER=oc
+      - DB_PASS=oc
+      - POLL_INTERVAL=300
+    secrets:
+      - db_user
+      - db_password
+    depends_on:
+      - db
+    network_mode: host
+    restart: unless-stopped
+
   api:
     build: ./services/api
+    environment:
+      - PG_DSN=postgresql://oc:oc@localhost/opsconductor
     secrets:
       - db_user
       - db_password

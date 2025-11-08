@@ -49,6 +49,13 @@ const getLayoutedElements = async (nodes, edges) => {
   return { nodes: layoutedNodes, edges }
 }
 
+const getEdgeColor = (confidence) => {
+  if (confidence >= 0.9) return '#22c55e'
+  if (confidence >= 0.75) return '#eab308'
+  if (confidence >= 0.6) return '#f97316'
+  return '#ef4444'
+}
+
 const TopologyMap = ({ onEdgeSelect, onNodeSelect }) => {
   const [nodes, setNodes, onNodesChange] = useNodesState([])
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
@@ -138,7 +145,7 @@ const TopologyMap = ({ onEdgeSelect, onNodeSelect }) => {
       setError(err.message)
       setLoading(false)
     }
-  }, [setNodes, setEdges])
+  }, [])
 
   useEffect(() => {
     fetchTopology()
@@ -146,12 +153,17 @@ const TopologyMap = ({ onEdgeSelect, onNodeSelect }) => {
     return () => clearInterval(interval)
   }, [fetchTopology])
 
-  const getEdgeColor = (confidence) => {
-    if (confidence >= 0.9) return '#22c55e'
-    if (confidence >= 0.75) return '#eab308'
-    if (confidence >= 0.6) return '#f97316'
-    return '#ef4444'
-  }
+  const handleEdgeClick = useCallback((event, edge) => {
+    if (onEdgeSelect) {
+      onEdgeSelect(edge)
+    }
+  }, [onEdgeSelect])
+
+  const handleNodeClick = useCallback((event, node) => {
+    if (onNodeSelect) {
+      onNodeSelect(node)
+    }
+  }, [onNodeSelect])
 
   if (loading) {
     return (
@@ -179,18 +191,6 @@ const TopologyMap = ({ onEdgeSelect, onNodeSelect }) => {
       </div>
     )
   }
-
-  const handleEdgeClick = useCallback((event, edge) => {
-    if (onEdgeSelect) {
-      onEdgeSelect(edge)
-    }
-  }, [onEdgeSelect])
-
-  const handleNodeClick = useCallback((event, node) => {
-    if (onNodeSelect) {
-      onNodeSelect(node)
-    }
-  }, [onNodeSelect])
 
   return (
     <div className="topology-map">
