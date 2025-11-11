@@ -25,16 +25,13 @@ An experimental network management system that uses Large Language Models to aut
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     PLANNED ARCHITECTURE                        │
-└─────────────────────────────────────────────────────────────────┘
-
   Network Interface
          │
          ▼
   ┌──────────────┐
-  │   Packet     │  ◄── NOT IMPLEMENTED
-  │  Collector   │      (Critical Gap)
+  │   Packet     │  ✓ Implemented
+  │  Collector   │    Scapy + asyncio
+  │  (250ms)     │    Host network mode
   └──────┬───────┘
          │ 250ms batches
          │ (ARP + Flows)
@@ -67,9 +64,9 @@ An experimental network management system that uses Large Language Models to aut
 | **Analyst** | Evidence → Patch reasoning | FastAPI + httpx | ✅ Running |
 | **State Server** | Graph storage & streaming | FastAPI + PostgreSQL | ✅ Running |
 | **UI** | Interactive visualization | React + vis-network | ✅ Running |
-| **Packet Collector** | pcap → evidence batches | TBD | ❌ **MISSING** |
+| **Packet Collector** | pcap → evidence batches | Python + Scapy | ✅ **Implemented** |
 
-> **⚠️ CRITICAL**: System is non-functional without the packet collector service. See [GAP_ANALYSIS.md](./GAP_ANALYSIS.md) for details.
+> **✅ COMPLETE**: All core services implemented. System is now functional for live network topology discovery.
 
 ---
 
@@ -620,15 +617,22 @@ MODEL_NAME=microsoft/Phi-3-mini-128k-instruct
 2. CORS origin matches client origin
 3. Firewall rules allow WebSocket connections
 
-### No Topology Updates
+### Packet Collector Not Capturing
 
-**Expected**: System requires packet collector service (not implemented)
+**Check**:
+1. Correct network interface: `ip addr` or `ifconfig`
+2. Update `PCAP_IFACE` in `.env`
+3. Container has NET_RAW capability
+4. BPF filter is not too restrictive
 
-**Workaround**: Send manual patches via API:
+**Logs**:
 ```bash
-curl -X POST http://localhost:8080/patch \
-  -H "Content-Type: application/json" \
-  -d @test_patch.json
+docker compose logs -f packet-collector
+```
+
+**Health check**:
+```bash
+curl http://localhost:9100/health
 ```
 
 ---

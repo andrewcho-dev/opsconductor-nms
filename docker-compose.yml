@@ -73,6 +73,8 @@ services:
     volumes:
       - ./schemas:/app/schemas:ro
       - ./prompts:/app/prompts:ro
+    ports:
+      - "8100:8100"
     depends_on:
       vllm:
         condition: service_started
@@ -92,5 +94,39 @@ services:
       state-server:
         condition: service_started
 
+  packet-collector:
+    build:
+      context: ./services/packet-collector
+      dockerfile: Dockerfile
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      - IFACE=${PCAP_IFACE:-eth0}
+      - BATCH_MS=${BATCH_MS:-250}
+      - MAX_EVIDENCE_ITEMS=${MAX_EVIDENCE_ITEMS:-1024}
+      - FILTER_BPF=${FILTER_BPF:-arp or ip or ip6}
+      - ANALYST_URL=${ANALYST_URL:-http://127.0.0.1:8100/tick}
+      - STATE_SERVER_URL=${STATE_SERVER_URL:-http://127.0.0.1:8080}
+      - SEED_GATEWAY_IP=${GATEWAY_IP:-}
+      - SEED_FIREWALL_IP=${FIREWALL_IP:-}
+      - HEALTH_PORT=9100
+      - TZ=UTC
+    volumes:
+      - packet_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9100/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    depends_on:
+      analyst:
+        condition: service_started
+      state-server:
+        condition: service_started
+
 volumes:
   pgdata:
+  packet_data:
