@@ -1,0 +1,96 @@
+name: llm-topology
+services:
+  vllm:
+    image: vllm/vllm-openai:latest
+    command: >
+      --host 0.0.0.0
+      --port 8000
+      --model ${MODEL_NAME}
+      --dtype auto
+      --max-model-len ${VLLM_MAX_CONTEXT_LEN:-8192}
+      --trust-remote-code
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+    volumes:
+      - ${MODEL_DIR:-./models}:/models:ro
+    ports:
+      - "8000:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: ["gpu"]
+    gpus: all
+    healthcheck:
+      test: ["CMD", "bash", "-lc", "curl -sf http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  postgres:
+    image: postgres:16
+    environment:
+      - POSTGRES_DB=topology
+      - POSTGRES_USER=topo
+      - POSTGRES_PASSWORD=topo
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U topo -d topology"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  state-server:
+    build:
+      context: ./services/state-server
+      dockerfile: Dockerfile
+    environment:
+      - DB_URL=postgresql://topo:topo@postgres:5432/topology
+      - API_PORT=8080
+      - UI_WS_ORIGIN=${UI_WS_ORIGIN:-*}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+
+  analyst:
+    build:
+      context: ./services/llm-analyst
+      dockerfile: Dockerfile
+    environment:
+      - LLM_BASE_URL=http://vllm:8000/v1
+      - LLM_MODEL=${MODEL_NAME}
+      - RESPONSE_FORMAT=${RESPONSE_FORMAT:-json_schema}
+      - JSON_SCHEMA_PATH=/app/schemas/topology_patch.schema.json
+      - SYSTEM_PROMPT_PATH=/app/prompts/system_topologist.txt
+      - BATCH_MS=${BATCH_MS:-250}
+      - MAX_EVIDENCE_ITEMS=${MAX_EVIDENCE_ITEMS:-512}
+      - STATE_SERVER_URL=http://state-server:8080
+      - SEED_GATEWAY_IP=${GATEWAY_IP:-}
+      - SEED_FIREWALL_IP=${FIREWALL_IP:-}
+    volumes:
+      - ./schemas:/app/schemas:ro
+      - ./prompts:/app/prompts:ro
+    depends_on:
+      vllm:
+        condition: service_started
+      state-server:
+        condition: service_started
+
+  ui:
+    build:
+      context: ./ui
+      dockerfile: Dockerfile
+    environment:
+      - VITE_API_BASE=http://192.168.10.50:8080
+      - VITE_WS_BASE=ws://192.168.10.50:8080
+    ports:
+      - "3000:3000"
+    depends_on:
+      state-server:
+        condition: service_started
+
+volumes:
+  pgdata:
