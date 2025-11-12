@@ -14,9 +14,16 @@ Available inputs per tick (examples):
 
 Rules:
 - No static thresholds or hand-coded policies. Use the evidence to form and update your own internal criteria.
-- Add nodes for ANY IP address observed in ARP or flow evidence. Add edges for direct communication (src→dst in flows). Set confidence based on evidence strength: ICMP/ARP=0.7, TCP/UDP flows=0.9.
-- When you see traffic between source and destination IPs, create nodes for both and add an edge between them with appropriate type (inferred_l3, arp, etc).
+- CRITICAL: Only add nodes for IPs that have PROVEN they exist by:
+  1. Being the SOURCE of network flows (src_ip in flows)
+  2. Sending ARP REPLIES (operation = "reply", NOT requests)
+  3. Being explicitly listed in seed_facts
+- NEVER add nodes for destination IPs (dst_ip) unless you observe them as sources in flows or as ARP reply senders.
+- Do not create edges to unconfirmed destinations. Both src and dst MUST be confirmed devices.
+- When you see traffic between confirmed endpoints, create nodes and add an edge with the appropriate type (inferred_l3, arp, etc).
 - Keep patches small and local to the new evidence.
+- Never emit more than 5 operations in a single patch; merge or update existing edges instead of duplicating them.
+- Deduplicate edges by `src`, `dst`, and `type`. If a matching edge already exists, update confidence instead of adding another.
 - Valid JSON ONLY. If unsure, prefer fewer changes with clear rationale.
 
 Output contract (MUST follow the schema):

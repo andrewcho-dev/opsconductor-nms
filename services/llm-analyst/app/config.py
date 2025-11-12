@@ -8,11 +8,14 @@ class Settings(BaseSettings):
     json_schema_path: str
     system_prompt_path: str
     batch_ms: int = 250
-    max_evidence_items: int = 80
+    max_evidence_items: int = 250
+    max_patch_operations: int = 20
+    max_flow_items: int = 500
+    max_arp_items: int = 100
     state_server_url: str
     seed_gateway_ip: str | None = None
     seed_firewall_ip: str | None = None
-    request_timeout: float = 30.0
+    request_timeout: float = 60.0
     max_retries: int = 2
 
     @property

@@ -66,6 +66,9 @@ def sniff_worker():
         if item:
             try: pkt_q.put_nowait(item)
             except queue.Full: pass
+        else:
+            if IP in pkt and "192.168.10.10" in str(pkt[IP].src):
+                print(f"[PARSE_FAIL] ICMP from 192.168.10.10 failed to parse", flush=True)
     sniff(iface=IFACE, prn=_cb, store=False, filter=FILTER_BPF,
           stop_filter=lambda _: stop_event.is_set())
 
@@ -134,8 +137,10 @@ async def tick_loop():
             if (now - last_flush) * 1000.0 >= BATCH_MS:
                 window_id = now_iso()
                 flow_items = []
+                unique_src_ips = set()
                 for k, agg in list(flows.items()):
                     sip, dip, protocol, sport, dport = json.loads(k)
+                    unique_src_ips.add(sip)
                     flow_items.append({
                         "timestamp": agg["last_ts"],
                         "src_ip": sip, "dst_ip": dip,
@@ -145,6 +150,7 @@ async def tick_loop():
                     })
                     if len(flow_items) >= MAX_EVIDENCE_ITEMS:
                         break
+                print(f"[TICK] flows={len(flows)} arps={len(arps)} src_ips={sorted(unique_src_ips)}", flush=True)
 
                 seed_facts = {}
                 if SEED_GATEWAY_IP: seed_facts["gateway_ip"] = SEED_GATEWAY_IP
