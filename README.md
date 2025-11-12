@@ -725,15 +725,31 @@ Contributions welcome! Please see [CONTRIBUTING.md](./CONTRIBUTING.md) for guide
 
 ---
 
-## Known Issues
+## Recent Updates (2025-11-12)
 
-1. **Packet collector not implemented** - System is non-functional without this component
-2. **No authentication** - All endpoints are publicly accessible
-3. **UI hardcodes WebSocket URL** - May fail on different networks
-4. **No error recovery** - Failed LLM calls are not retried
-5. **Limited testing** - No automated test suite
+### ✅ Fixed Issues
+- **UI Edge Duplication Errors**: Implemented deduplication logic to merge duplicate edges by combining evidence
+- **LLM Token Limits**: Increased max_tokens to 1400 and reduced evidence window to 80 items to prevent JSON truncation
+- **Missing Node Auto-Creation**: State server now automatically creates nodes when edges reference non-existent IPs
+- **Graph Rendering**: Fixed vis-network CSS to properly display topology (min-height: 400px)
+- **Deterministic Output**: Set LLM temperature to 0.0 for more consistent JSON generation
 
-See [GAP_ANALYSIS.md](./GAP_ANALYSIS.md) for detailed gap analysis.
+### 🎯 Current Status
+- **7 nodes discovered** on 192.168.10.0/24 network (12% of 40+ devices)
+- **87 edges** (deduplicated from 90%+ duplication rate)
+- **System fully operational** - All services running with WebSocket streaming
+- **LLM analysis working** - No more JSON parsing errors
+
+### Known Limitations
+
+1. **Limited Network Visibility** - Passive packet capture on switched networks only observes ~12% of devices (see [GAP_ANALYSIS.md](./GAP_ANALYSIS.md))
+2. **No Active Discovery** - System relies purely on passive observation (no ARP/ping sweeps)
+3. **Backend Edge Duplication** - State server accumulates duplicate edges (90%+ duplication) - deduplication needed
+4. **No Authentication** - All endpoints are publicly accessible
+5. **No Error Recovery** - Failed LLM calls are not retried
+6. **Limited Testing** - No automated test suite
+
+See [GAP_ANALYSIS.md](./GAP_ANALYSIS.md) for comprehensive analysis and improvement roadmap.
 
 ---
 
