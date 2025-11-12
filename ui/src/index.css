@@ -50,6 +50,8 @@ body {
 }
 
 .graph {
+  width: 100%;
+  min-height: 400px;
   background-color: rgba(148, 163, 184, 0.05);
   position: relative;
   height: 100%;

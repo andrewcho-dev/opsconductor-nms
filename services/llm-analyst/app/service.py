@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -7,6 +8,9 @@ from jsonschema import validate
 
 from .config import settings
 from .schemas import AnalystResponse, InferenceInput, PatchEnvelope
+from .json_repair import repair_truncated_json
+
+logger = logging.getLogger(__name__)
 
 
 class AnalystService:
@@ -55,9 +59,9 @@ class AnalystService:
         payload = {
             "model": settings.llm_model,
             "messages": messages,
-            "temperature": 0.2,
+            "temperature": 0.0,
             "top_p": 0.9,
-            "max_tokens": 1024,
+            "max_tokens": 1400,
         }
         if settings.response_format == "json_schema" and self._schema is not None:
             payload["response_format"] = {
@@ -73,8 +77,30 @@ class AnalystService:
         if not data.get("choices"):
             raise RuntimeError("LLM response missing choices")
         content = data["choices"][0]["message"]["content"]
-        parsed = json.loads(content)
-        if self._schema is not None:
+        
+        logger.info(f"Raw LLM response length: {len(content)}")
+        logger.info(f"Response head (500 chars): {content[:500]}")
+        logger.info(f"Response tail (500 chars): ...{content[-500:]}")
+        
+        finish_reason = data["choices"][0].get("finish_reason", "unknown")
+        logger.info(f"Finish reason: {finish_reason}")
+        
+        try:
+            parsed = json.loads(content)
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error: {e.msg} at position {e.pos}")
+            logger.error(f"Context around error (100 chars before/after): ...{content[max(0, e.pos-100):min(len(content), e.pos+100)]}...")
+            logger.warning("Attempting to repair truncated JSON...")
+            try:
+                repaired = repair_truncated_json(content)
+                logger.info(f"Repaired JSON tail: ...{repaired[-200:]}")
+                parsed = json.loads(repaired)
+                logger.info("JSON repair successful!")
+            except Exception as repair_err:
+                logger.error(f"JSON repair failed: {repair_err}")
+                raise e
+            
+        if self._schema is not None and settings.response_format == "json_schema":
             validate(parsed, self._schema)
         return parsed
 

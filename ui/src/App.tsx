@@ -44,7 +44,11 @@ function App() {
   }, [status]);
 
   const syncGraph = useCallback((graph: GraphPayload | undefined) => {
-    if (!graph) return;
+    if (!graph) {
+      console.log('[syncGraph] No graph provided');
+      return;
+    }
+    console.log('[syncGraph] Received graph:', graph);
     const nodesDataset = nodesRef.current;
     const edgesDataset = edgesRef.current;
     nodesDataset.clear();
@@ -61,11 +65,24 @@ function App() {
         group: kind,
       };
     });
+    console.log('[syncGraph] Node items to add:', nodeItems);
     if (nodeItems.length > 0) {
-      nodesDataset.add(nodeItems);
+      nodesDataset.update(nodeItems);
+      console.log('[syncGraph] Nodes added. Dataset size:', nodesDataset.length);
     }
     edgesDataset.clear();
-    const edgeItems = (graph.edges ?? []).map((edge) => {
+    const edgeMap = new Map<string, EdgeMeta>();
+    (graph.edges ?? []).forEach((edge) => {
+      const id = `${edge.src}-${edge.dst}-${edge.type}`;
+      const existing = edgeMap.get(id);
+      if (existing) {
+        existing.evidence.push(...edge.evidence);
+        existing.confidence = Math.max(existing.confidence, edge.confidence);
+      } else {
+        edgeMap.set(id, { ...edge });
+      }
+    });
+    const edgeItems = Array.from(edgeMap.values()).map((edge) => {
       const opacity = Math.min(1, Math.max(0.2, edge.confidence));
       const label = `${edge.type} ${edge.confidence.toFixed(2)}`;
       return {
@@ -79,15 +96,25 @@ function App() {
         title: edge.evidence.join("\n"),
       };
     });
+    console.log('[syncGraph] Edge items to add:', edgeItems);
     if (edgeItems.length > 0) {
-      edgesDataset.add(edgeItems);
+      edgesDataset.update(edgeItems);
+      console.log('[syncGraph] Edges added. Dataset size:', edgesDataset.length);
+    }
+    if (networkRef.current) {
+      console.log('[syncGraph] Network instance exists, calling fit');
+      networkRef.current.fit();
+    } else {
+      console.log('[syncGraph] WARNING: No network instance!');
     }
   }, []);
 
   useEffect(() => {
+    console.log('[Network Effect] Container ref:', containerRef.current);
     if (!containerRef.current) return;
     nodesRef.current = new DataSet([]);
     edgesRef.current = new DataSet([]);
+    console.log('[Network Effect] Creating Network instance');
     networkRef.current = new Network(
       containerRef.current,
       { nodes: nodesRef.current, edges: edgesRef.current },
@@ -101,7 +128,9 @@ function App() {
         },
       }
     );
+    console.log('[Network Effect] Network created:', networkRef.current);
     return () => {
+      console.log('[Network Effect] Cleanup');
       networkRef.current?.destroy();
       nodesRef.current.clear();
       edgesRef.current.clear();
@@ -109,15 +138,22 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!apiBase) return;
+    if (!apiBase) {
+      console.log('[API Effect] No API base configured');
+      return;
+    }
+    console.log('[API Effect] Loading initial graph from:', apiBase);
     const load = async () => {
       try {
         const response = await fetch(`${apiBase.replace(/\/$/, "")}/graph`);
+        console.log('[API Effect] Fetch response:', response.status, response.ok);
         if (!response.ok) throw new Error("failed to load graph");
         const data: PatchMessage = await response.json();
+        console.log('[API Effect] Received data:', data);
         syncGraph(data.graph);
         setUpdatedAt(data.updated_at ?? "-");
       } catch (error) {
+        console.error('[API Effect] Error loading graph:', error);
         setStatus("error");
       }
     };
@@ -126,26 +162,40 @@ function App() {
 
   useEffect(() => {
     if (!wsBase) {
+      console.log('[WS Effect] No WebSocket base configured');
       setStatus("ws disabled");
       return;
     }
     const url = `${wsBase.replace(/\/$/, "")}/ws`;
+    console.log('[WS Effect] Connecting to:', url);
     const socket = new WebSocket(url);
-    socket.onopen = () => setStatus("connected");
-    socket.onerror = () => setStatus("error");
-    socket.onclose = () => setStatus("disconnected");
+    socket.onopen = () => {
+      console.log('[WS] Connected');
+      setStatus("connected");
+    };
+    socket.onerror = (err) => {
+      console.error('[WS] Error:', err);
+      setStatus("error");
+    };
+    socket.onclose = () => {
+      console.log('[WS] Disconnected');
+      setStatus("disconnected");
+    };
     socket.onmessage = (event) => {
       try {
         const payload: PatchMessage = JSON.parse(event.data);
+        console.log('[WS] Message received:', payload);
         syncGraph(payload.graph);
         setUpdatedAt(payload.updated_at ?? "-");
         setRationale(payload.rationale ?? "");
         setWarnings(payload.warnings ?? []);
       } catch (error) {
+        console.error('[WS] Error parsing message:', error);
         setStatus("error");
       }
     };
     return () => {
+      console.log('[WS Effect] Cleanup, closing socket');
       socket.close();
     };
   }, [syncGraph]);

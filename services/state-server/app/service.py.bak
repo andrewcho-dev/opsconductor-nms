@@ -43,14 +43,6 @@ class GraphService:
             ops = [self._operation_to_dict(op) for op in request.patch]
             patch = jsonpatch.JsonPatch(ops)
             target = patch.apply(source, in_place=False)
-
-            # Auto-create missing nodes referenced in edges
-            for edge in target.get("edges", []):
-                for ip_key in ["src", "dst"]:
-                    ip = edge.get(ip_key)
-                    if ip and ip not in target.get("nodes", {}):
-                        target.setdefault("nodes", {})[ip] = {"ip": ip, "kind": "host"}
-
             payload = GraphStatePayload.model_validate(target)
             state.graph = payload.model_dump(mode="json")
             await session.flush()

@@ -30,4 +30,6 @@ async def tick(request: InferenceInput) -> AnalystResponse:
     try:
         return await service.process(request)
     except Exception as exc:
+        import logging
+        logging.error(f"Tick processing failed: {exc}", exc_info=True)
         raise HTTPException(status_code=400, detail=str(exc)) from exc

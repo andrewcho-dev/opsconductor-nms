@@ -1,384 +1,317 @@
 # Gap Analysis: LLM-Powered Network Topology Discovery System
 
-**Date**: 2025-11-11  
-**Status**: ✅ Fully Implemented - Functional
+**Date**: 2025-11-12  
+**Status**: ⚠️ Partially Functional - Core Issues Identified
 
 ---
 
-## Executive Summary
+## Critical Issues
 
-The system architecture is **100% complete** with all core services implemented and containerized. The previously missing packet capture and evidence aggregation service has been **implemented and integrated**. The system is now **fully functional** for live network topology discovery.
+### 🔴 **PRIMARY PROBLEM: Minimal Network Discovery**
+
+**Expected**: Rich "spaghetti" network visualization with 40+ devices from 192.168.10.0/24 network
+**Actual**: Only 5 nodes with 77 duplicate edges (8 unique relationships)
+
+**Root Causes**:
+
+1. **Switched Network Visibility Limitation**
+   - Passive packet capture on switched network only sees:
+     - Traffic to/from capture host (192.168.10.50)
+     - Broadcast/multicast traffic
+   - CANNOT see unicast traffic between other devices
+   - **Impact**: 95% of network topology is invisible
+
+2. **Insufficient Active Discovery**
+   - No ping sweep being performed
+   - No ARP probing
+   - Relying purely on passive observation of existing traffic
+   - **Impact**: Silent/idle devices never discovered
+
+3. **Edge Duplication Problem**
+   - 77 total edges but only 8 unique pairs
+   - LLM generating duplicate edges with different evidence
+   - State server not deduplicating edges
+   - **Impact**: Graph bloat, poor visualization performance
+
+4. **Missing Node Auto-Creation**
+   - Edges reference IPs not in nodes dict (e.g., 192.168.10.1)
+   - vis-network cannot render edges without both endpoints
+   - **Impact**: Invisible relationships even when discovered
 
 ---
 
-## System Architecture Overview
+## Current System State
 
-### Designed Components
+### ✅ What's Working
+
+- ✅ Packet collector capturing ARP + flows
+- ✅ LLM analyst generating patches
+- ✅ State server applying patches
+- ✅ UI rendering nodes and edges
+- ✅ WebSocket real-time updates
+- ✅ All Docker services healthy
+
+### 🔴 What's Broken/Missing
+
+#### 1. **Network Discovery Scope** (CRITICAL)
+   - **Problem**: Only discovering 5 nodes from 40+ device network
+   - **Cause**: Switched network + passive-only capture
+   - **Solution Required**: Active discovery (ping sweep, ARP scan)
+
+#### 2. **Edge Management** (HIGH PRIORITY)
+   - **Problem**: Massive edge duplication (77 edges, 8 unique)
+   - **Cause**: LLM re-adding same edges with different evidence timestamps
+   - **Solution Required**: Edge deduplication logic in state server
+
+#### 3. **Node Creation** (HIGH PRIORITY)
+   - **Problem**: Edges reference non-existent nodes
+   - **Cause**: LLM creates edges but forgets to create nodes first
+   - **Solution Required**: Auto-create missing nodes (partially implemented)
+
+#### 4. **LLM Token Limitations** (MEDIUM)
+   - **Problem**: JSON truncation at max_tokens limit
+   - **Cause**: 4096 context model with large evidence windows
+   - **Current Workaround**: Reduced max_evidence_items to 80
+   - **Proper Solution**: Upgrade to 8k or 32k context model
+
+#### 5. **Visualization** (MEDIUM)
+   - **Problem**: No "spaghetti" network - minimal graph
+   - **Cause**: Only 5 nodes discovered
+   - **Dependency**: Blocked by network discovery issues
+
+---
+
+## Architecture Review
+
+### Designed vs Actual
 
 ```
-┌─────────────────┐
-│  Packet Source  │ ✅ IMPLEMENTED
-│  (Scapy/BPF)    │
-└────────┬────────┘
-         │
-         v
-┌─────────────────┐
-│  Evidence       │ ✅ IMPLEMENTED
-│  Aggregator     │
-│  (250ms batch)  │
-└────────┬────────┘
-         │
-         v
-┌─────────────────┐
-│  LLM Analyst    │ ✅ IMPLEMENTED
-│  (Phi-3 model)  │
-└────────┬────────┘
-         │
-         v
-┌─────────────────┐
-│  State Server   │ ✅ IMPLEMENTED
-│  (PostgreSQL)   │
-└────────┬────────┘
-         │
-         v
-┌─────────────────┐
-│  UI (React)     │ ✅ IMPLEMENTED
-│  (vis-network)  │
-└─────────────────┘
-```
-
----
-
-## Implementation Status
-
-### ✅ Completed Components
-
-#### 1. **vLLM Service**
-- **Status**: Running (healthy)
-- **Model**: microsoft/Phi-3-mini-4k-instruct
-- **Context**: 4096 tokens
-- **Port**: 8000
-- **API**: OpenAI-compatible `/v1/chat/completions`
-
-#### 2. **State Server**
-- **Status**: Running
-- **Stack**: FastAPI + PostgreSQL + AsyncIO
-- **Port**: 8080
-- **Features**:
-  - REST API (`/graph`, `/patch`, `/patches`)
-  - WebSocket streaming (`/ws`)
-  - JSON Patch-based graph updates
-  - CORS configured for UI
-- **Location**: `services/state-server/app/`
-
-#### 3. **LLM Analyst Service**
-- **Status**: Running (recovered from startup error)
-- **Stack**: FastAPI + httpx + jsonschema
-- **Port**: Not exposed (internal only)
-- **Features**:
-  - `/tick` endpoint accepting evidence batches
-  - JSON Schema validation (`topology_patch.schema.json`)
-  - System prompt loaded from `prompts/system_topologist.txt`
-  - Structured output with confidence scores
-  - Auto-applies patches to state-server
-- **Location**: `services/llm-analyst/app/`
-
-#### 4. **UI Service**
-- **Status**: Running
-- **Stack**: React 18 + TypeScript + Vite + vis-network
-- **Port**: 3000
-- **Features**:
-  - Real-time graph visualization
-  - WebSocket connection to state-server
-  - Network topology rendering
-- **Location**: `ui/`
-
-#### 5. **PostgreSQL**
-- **Status**: Running (healthy)
-- **Database**: topology
-- **Credentials**: topo/topo
-
-#### 6. **Configuration & Schemas**
-- **Topology Patch Schema**: `schemas/topology_patch.schema.json` (125 lines, complete)
-- **System Prompt**: `prompts/system_topologist.txt` (28 lines, comprehensive)
-- **Environment Config**: `.env` (model selection, context length)
-- **Docker Compose**: `docker-compose.yml` (97 lines, all services defined)
-
----
-
-## ✅ Previously Critical Gaps (Now Resolved)
-
-### 1. **Evidence Capture Service** (✅ IMPLEMENTED)
-
-**Status**: ✅ Implemented
-
-**Implementation Details**:
-- ✅ Uses Scapy for packet capture with BPF filtering
-- ✅ Parses ARP frames and IP/IPv6 flows
-- ✅ Aggregates flows by 5-tuple (src_ip, dst_ip, protocol, src_port, dst_port)
-- ✅ Batches evidence into 250ms windows
-- ✅ Formats data according to `InferenceInput` schema
-- ✅ HTTP POST to analyst `/tick` endpoint every 250ms
-- ✅ Dead-letter queue for failed requests
-- ✅ Health check endpoint on port 9100
-- ✅ Runs in host network mode with NET_RAW capability
-
-**Expected Input Format to `/tick`**:
-```json
-{
-  "evidence_window": {
-    "window_id": "t0+250ms",
-    "arp": [
-      {
-        "timestamp": "2025-11-11T18:00:00.123Z",
-        "src_ip": "192.168.10.50",
-        "src_mac": "aa:bb:cc:dd:ee:ff",
-        "dst_ip": "192.168.10.1",
-        "operation": "request"
-      }
-    ],
-    "flows": [
-      {
-        "timestamp": "2025-11-11T18:00:00.150Z",
-        "src_ip": "192.168.10.50",
-        "dst_ip": "8.8.8.8",
-        "src_port": 54321,
-        "dst_port": 443,
-        "protocol": "tcp",
-        "packets": 5,
-        "bytes": 1500
-      }
-    ]
-  },
-  "hypothesis_digest": {
-    "node_count": 2,
-    "edge_count": 1,
-    "top_edges": ["192.168.10.1->192.168.10.50"]
-  },
-  "seed_facts": {
-    "gateway_ip": "192.168.10.1"
-  },
-  "previous_rationales": []
-}
-```
-
-**Implementation**:
-- Language: Python 3.11 with asyncio + uvloop
-- Libraries: `scapy` for packet capture, `httpx` for HTTP client, `aiohttp` for health server
-- Configuration: Environment variables (IFACE, BATCH_MS, FILTER_BPF, etc.)
-- Deployment: Docker service with `network_mode: host` and `CAP_NET_RAW` + `CAP_NET_ADMIN`
-- **Location**: `services/packet-collector/`
-
-**Files Added**:
-- `services/packet-collector/Dockerfile` - Container build
-- `services/packet-collector/requirements.txt` - Python dependencies
-- `services/packet-collector/app/main.py` - Main service logic (308 lines)
-- `services/packet-collector/.dockerignore` - Build exclusions
-- Updated `docker-compose.yml` - Service definition with host networking
-- Updated `.env` - Packet collector configuration
-
----
-
-### 2. **Missing: System Initialization** (HIGH PRIORITY)
-
-**Description**: No bootstrap process to seed initial graph state
-
-**Current State**: 
-- Graph has 2 manually-inserted nodes
-- No automated seeding from `.env` variables
-
-**Expected Behavior**:
-- On startup, seed gateway IP (from `GATEWAY_IP` env var)
-- On startup, seed firewall IP (from `FIREWALL_IP` env var)
-- Create initial nodes in graph via state-server API
-
-**Suggested Implementation**:
-- Init container in docker-compose with `depends_on` state-server
-- Simple Python/bash script to POST initial nodes
-- Run once on stack startup
-
----
-
-### 3. **Missing: Error Recovery & Monitoring** (MEDIUM PRIORITY)
-
-**Gaps**:
-- No health checks on analyst service
-- No retry logic for failed `/tick` calls
-- No dead-letter queue for problematic evidence batches
-- No metrics/observability (Prometheus, Grafana)
-- No structured logging aggregation
-
-**Impact**: System will fail silently on errors
-
----
-
-### 4. **Missing: Testing & Validation** (MEDIUM PRIORITY)
-
-**Gaps**:
-- No unit tests
-- No integration tests
-- No synthetic data generator for testing
-- No PCAP replay capability
-- No performance benchmarks
-
-**Impact**: Unknown behavior under load or edge cases
-
----
-
-### 5. **Documentation Gaps** (LOW PRIORITY)
-
-**Missing**:
-- README.md (setup, architecture, usage)
-- API documentation (OpenAPI/Swagger)
-- Deployment guide
-- Network requirements documentation
-- Troubleshooting guide
-
----
-
-## Configuration Issues
-
-### Resolved
-- ❌ **Analyst Service Startup Crash** (resolved during analysis)
-  - **Error**: `JSONDecodeError: Invalid \escape: line 28 column 58`
-  - **Root Cause**: JSON parser strict on regex escapes in schema
-  - **Status**: Service now running after container restart
-
-### Existing
-- **UI WebSocket URLs hardcoded to `192.168.10.50`**
-  - May not work on different networks
-  - Should use relative URLs or environment-based configuration
-
----
-
-## Data Flow Analysis
-
-### Implemented Flow
-```
-1. ✅ Packet Collector → captures raw packets (250ms window)
-2. ✅ Packet Collector → formats evidence → POST /tick → Analyst
-3. ✅ Analyst → LLM inference → generates patch JSON
-4. ✅ Analyst → validates patch → POST /patch → State Server
-5. ✅ State Server → applies patch → broadcasts via WebSocket
-6. ✅ UI → receives update → renders graph changes
-```
-
-All components are connected and functional.
-
----
-
-## Environment Variables
-
-### Configured
-```bash
-MODEL_NAME=microsoft/Phi-3-mini-4k-instruct
-VLLM_MAX_CONTEXT_LEN=4096
-HF_TOKEN=
-```
-
-### Used but Not Set
-```bash
-GATEWAY_IP=          # Used by analyst service
-FIREWALL_IP=         # Used by analyst service
-BATCH_MS=250         # Hardcoded in docker-compose
-MAX_EVIDENCE_ITEMS=512  # Hardcoded in docker-compose
+DESIGNED FLOW                          ACTUAL FLOW
+─────────────────                      ──────────────
+Network (40+ devices)                  Network (40+ devices)
+         ↓                                     ↓
+Packet Capture ✅                      Packet Capture ✅ (limited visibility)
+   (all traffic)                          (only host + broadcast)
+         ↓                                     ↓
+Evidence Window ✅                     Evidence Window ✅ (2-5 hosts)
+  (250ms batch)                          (250ms batch)
+         ↓                                     ↓
+LLM Analyst ✅                         LLM Analyst ⚠️ (truncation issues)
+  (topology patches)                     (duplicate edges)
+         ↓                                     ↓
+State Server ✅                        State Server ⚠️ (no dedup)
+  (graph storage)                        (77 duplicate edges)
+         ↓                                     ↓
+UI Visualization ✅                    UI Visualization ⚠️ (5 nodes)
+  (spaghetti network)                    (minimal graph)
 ```
 
 ---
 
-## Network Topology Test Data
+## Required Fixes
 
-### Current Graph State
-```json
-{
-  "nodes": {
-    "192.168.10.1": {
-      "ip": "192.168.10.1",
-      "kind": "gateway",
-      "role": "core",
-      "labels": ["seed"]
-    },
-    "192.168.10.50": {
-      "ip": "192.168.10.50",
-      "kind": "host",
-      "role": "workstation"
-    }
-  },
-  "edges": [
-    {
-      "src": "192.168.10.1",
-      "dst": "192.168.10.50",
-      "type": "inferred_l3",
-      "confidence": 0.8,
-      "evidence": ["manual"],
-      "notes": null
-    }
-  ]
-}
+### Priority 0 (Blocking)
+
+1. **Implement Active Discovery**
+   ```python
+   # Add to packet-collector service
+   async def active_discovery_loop():
+       while True:
+           # ARP scan entire subnet
+           for ip in subnet_ips():
+               send_arp_request(ip)
+           # ICMP ping sweep
+           for ip in subnet_ips():
+               send_icmp_ping(ip)
+           await asyncio.sleep(30)  # Every 30 seconds
+   ```
+
+2. **Fix Edge Deduplication**
+   ```python
+   # Add to state-server service.py
+   def deduplicate_edges(edges):
+       seen = {}
+       for edge in edges:
+           key = (edge['src'], edge['dst'], edge['type'])
+           if key not in seen or edge['confidence'] > seen[key]['confidence']:
+               seen[key] = edge
+       return list(seen.values())
+   ```
+
+3. **Ensure Node Auto-Creation**
+   - ✅ Partially implemented
+   - Need to verify it's working correctly
+
+### Priority 1 (High)
+
+4. **Reduce LLM Patch Complexity**
+   - Limit patches to 3-5 operations max
+   - Focus on highest-confidence discoveries
+   - Update system prompt
+
+5. **Add Graph Cleanup**
+   - Remove low-confidence edges after N minutes
+   - Prune inactive nodes
+   - Limit total edge count per node pair
+
+6. **Improve Evidence Window Quality**
+   - Prioritize new discoveries over repeated observations
+   - Deduplicate flows before sending to LLM
+   - Include node/edge counts in prompt
+
+### Priority 2 (Medium)
+
+7. **Upgrade LLM Model**
+   - Switch to Phi-3-medium-4k-instruct (better reasoning)
+   - Or use Phi-3-mini-128k-instruct (massive context)
+   - Or use Llama-3-8B-Instruct
+
+8. **Add UI Features**
+   - Node search/filter
+   - Edge thickness based on confidence
+   - Color coding by node type
+   - Time-travel (view graph history)
+   - Export to GraphML/JSON
+
+---
+
+## Network Discovery Strategy
+
+### Current Limitations
+
+**Switched Network Reality**:
+```
+Switch Port Mirroring: NO
+Promiscuous Mode: YES (but ineffective on switched network)
+SPAN/TAP: NO
+
+Visible Traffic:
+├─ ✅ Traffic to/from 192.168.10.50 (capture host)
+├─ ✅ ARP broadcasts
+├─ ✅ Multicast traffic (MDNS, SSDP, etc.)
+└─ ❌ Unicast traffic between other devices (95% of network)
+```
+
+### Required Approach
+
+**Active + Passive Hybrid**:
+```python
+# Passive: Observe what we can see
+- ARP replies
+- Flows to/from this host
+- Broadcast/multicast announcements
+
+# Active: Probe for what we can't see
+- ARP scan: Probe every IP in subnet
+- ICMP ping: Verify liveness
+- TCP SYN scan: Discover services (optional)
+- DNS queries: Map hostnames
 ```
 
 ---
 
-## Recommendations
+## Immediate Action Items
 
-### Completed (P0) ✅
-1. ✅ **Packet collector service implemented**
-   - Basic pcap → ARP/flow parser
-   - Calls analyst `/tick` endpoint with batched evidence
-   - Handles errors gracefully with DLQ
+1. **Add ARP Sweep to Packet Collector**
+   - Scan 192.168.10.0/24 every 30 seconds
+   - Generate ARP requests for all IPs
+   - Capture responses to discover devices
 
-### Immediate Actions (P1)
-1. **Add system initialization**
-   - Seed graph on startup
-   - Validate all services are reachable
+2. **Implement Edge Deduplication**
+   - Modify state-server to merge duplicate edges
+   - Keep highest confidence + merge evidence arrays
 
-2. **Create test harness**
-   - PCAP replay tool
-   - Synthetic traffic generator
-   - Validate end-to-end flow
+3. **Update System Prompt**
+   - Limit to 3-5 operations per patch
+   - Prioritize NEW discoveries
+   - Explain edge/node creation atomicity
 
-### Short-term (P1)
-1. Add health checks to all services
-2. Implement structured logging
-3. Add basic metrics (request counts, latency)
-4. Create README with quickstart guide
+4. **Add Graph Stats Endpoint**
+   - `/stats` showing node count, edge count, duplicates
+   - Help debug what LLM is producing
 
-### Long-term (P2)
-1. Add authentication/authorization
-2. Implement graph history/time-travel
-3. Add filtering/search in UI
-4. Support multiple network interfaces
-5. Add export capabilities (GraphML, JSON, etc.)
+5. **Create Active Discovery Service** (NEW)
+   - Separate service for active scanning
+   - Configurable scan intervals
+   - Feeds discovered IPs to packet collector
 
 ---
 
-## Estimated Effort (Remaining Work)
+## Success Metrics
 
-| Component | Complexity | Estimated Effort |
-|-----------|-----------|------------------|
-| ~~Packet Collector Service~~ | ~~Medium~~ | ✅ **Completed** |
-| System Initialization | Low | 2-4 hours |
-| Test Harness | Medium | 1-2 days |
-| ~~Documentation~~ | ~~Low~~ | ✅ **Completed** |
-| Monitoring/Observability | Medium | 2-3 days |
-| **Total Remaining** | | **3-4 days** |
+### Current State
+- ❌ Nodes discovered: 5 / 40+ (12%)
+- ❌ Edge quality: 77 total / 8 unique (90% duplication)
+- ❌ Visualization: Minimal graph (not "spaghetti")
+- ✅ Services: All running
+- ⚠️ LLM: Generating patches but with issues
+
+### Target State
+- ✅ Nodes discovered: 35+ / 40+ (85%+)
+- ✅ Edge quality: <10% duplication
+- ✅ Visualization: Complex "spaghetti" network
+- ✅ Discovery rate: New nodes every 30-60 seconds
+- ✅ LLM: Clean, atomic patches
+
+---
+
+## Updated Architecture Diagram
+
+```
+┌─────────────────────────────────────┐
+│       Network (192.168.10.0/24)     │
+│         40+ devices (target)        │
+└──────────────┬──────────────────────┘
+               │
+        ┌──────┴──────┐
+        │             │
+  [Passive]      [Active]  ← NEW COMPONENT NEEDED
+        │             │
+        │      ┌──────┴──────┐
+        │      │ ARP Sweeper │
+        │      │ Ping Sweep  │
+        │      └──────┬──────┘
+        │             │
+        └──────┬──────┘
+               ▼
+    ┌──────────────────┐
+    │ Packet Collector │ ✅ Working
+    │   (Scapy/BPF)    │    (visibility limited)
+    └────────┬─────────┘
+             │ 250ms batches
+             ▼
+    ┌──────────────────┐
+    │  LLM Analyst     │ ⚠️ Truncation + Duplication
+    │  (Phi-3-4k)      │    (needs prompt tuning)
+    └────────┬─────────┘
+             │ JSON Patch
+             ▼
+    ┌──────────────────┐
+    │  State Server    │ ⚠️ No Edge Deduplication
+    │  (PostgreSQL)    │    (needs dedup logic)
+    └────────┬─────────┘
+             │ WebSocket
+             ▼
+    ┌──────────────────┐
+    │  UI (React)      │ ✅ Rendering OK
+    │  (vis-network)   │    (but limited data)
+    └──────────────────┘
+```
 
 ---
 
 ## Conclusion
 
-The system demonstrates solid architectural design and has successfully implemented **all core components** including LLM integration, graph storage, real-time visualization, and packet capture. The system is now **fully operational** for live network topology discovery.
+The system **architecture is sound** but **implementation has critical gaps**:
 
-**Key Achievement**: The critical packet collector service has been implemented with proper error handling, health checks, and integration with existing services. The system can now autonomously discover and map network topology from live traffic.
+1. **Network visibility**: Passive-only approach cannot see most network activity
+2. **Edge quality**: Massive duplication due to lack of deduplication logic
+3. **Node discovery**: Only seeing 5 of 40+ devices due to switched network
 
-**Remaining Work**: Focus areas include system initialization scripts, automated testing, and enhanced monitoring/observability. These are quality-of-life improvements rather than blockers.
+**Next Steps**:
+1. Add active discovery (ARP sweep, ping sweep)
+2. Implement edge deduplication
+3. Tune LLM prompts to reduce patch complexity
+4. Add graph statistics/monitoring
 
----
-
-## Files to Review
-
-- `docker-compose.yml` - Service orchestration
-- `services/llm-analyst/app/service.py` - Evidence processing logic
-- `services/state-server/app/main.py` - Graph API endpoints
-- `schemas/topology_patch.schema.json` - Data contract
-- `prompts/system_topologist.txt` - LLM instructions
+**ETA to "Spaghetti Network"**: 1-2 days with active discovery + deduplication
