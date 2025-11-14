@@ -106,7 +106,7 @@ OpsConductor NMS is a comprehensive network management system that combines:
 | **SNMP Discovery** | SNMP querying | Python + pysnmp | 9300 (health) | ✅ Working |
 | **MAC Enricher** | Vendor identification | IEEE OUI lookup | 9400 (health) | ✅ Working |
 | **MIB Assigner** | Auto MIB assignment | Python | 9500 (health) | ✅ Working |
-| **MIB Walker** | SNMP data collection | Python + pysnmp | 9600 (health) | ✅ Working |
+| **MIB Walker** | SNMP data collection with OID resolution | Python + pysnmp + pysmi | 9600 (health) | ✅ Working |
 | **UI** | Web interface | React + TypeScript | 3000 | ✅ Working |
 | **PostgreSQL** | Database | PostgreSQL 16 | 5432 (internal) | ✅ Working |
 
@@ -167,9 +167,11 @@ Audit log of all topology changes
 
 #### MIB Management
 - `GET /api/mibs` - List all MIBs
+- `GET /api/mibs/{mib_id}` - Get MIB content by ID
 - `POST /api/mibs` - Upload new MIB
 - `DELETE /api/mibs/{id}` - Delete MIB
 - `GET /api/inventory/{ip}/mibs/suggestions` - Get MIB suggestions for device
+- `POST /api/inventory/{ip}/walk-mib` - Trigger manual MIB walk for device
 
 #### Seed Configuration
 - `GET /seed` - Get seed configuration
@@ -213,8 +215,10 @@ Audit log of all topology changes
    ↓
 7. MIB WALKER
    ↓ Walks SNMP tree with assigned MIB
-   ↓ Collects detailed metrics (interfaces, storage, etc.)
-   ↓ Updates snmp_data JSONB
+   ↓ Resolves numeric OIDs to text labels using PySNMP MibViewController
+   ↓ Loads standard MIBs from http://mibs.pysnmp.com
+   ↓ Collects detailed metrics with human-readable labels
+   ↓ Updates snmp_data JSONB (vendor_mib_data field)
    ↓
 8. LLM ANALYST
    ↓ Analyzes all collected data
@@ -250,6 +254,45 @@ Audit log of all topology changes
 - **Container**: Docker + Docker Compose
 - **GPU**: NVIDIA Container Toolkit (for vLLM)
 - **Networking**: Host network mode (packet collector)
+
+---
+
+## Key Features Implementation
+
+### SNMP OID Text Label Resolution
+
+The MIB Walker service implements automatic OID resolution to convert numeric OIDs into human-readable text labels.
+
+**Technical Implementation**:
+
+1. **MIB Compilation**: Uses `pysmi` package to compile and load MIB definitions
+2. **Remote MIB Source**: Configured to fetch MIBs from `http://mibs.pysnmp.com/asn1/@mib@` on-demand
+3. **Standard MIBs Loaded**: 
+   - SNMPv2-MIB
+   - IF-MIB
+   - IP-MIB
+   - TCP-MIB
+   - UDP-MIB
+   - HOST-RESOURCES-MIB
+   - Printer-MIB
+   - BRIDGE-MIB
+   - ENTITY-MIB
+4. **Resolution Process**:
+   - Creates `MibBuilder` and `MibViewController` instances
+   - Loads standard MIBs during initialization
+   - For each OID during SNMP walk: calls `getNodeName(oid_tuple)` to resolve
+   - Returns tuple: `(oid, label, suffix)`
+   - Constructs human-readable label: `label + '.' + suffix`
+5. **Fallback Behavior**: If resolution fails, falls back to shortened numeric labels (last 4 OID components)
+
+**Example Output**:
+- Before: `1.1.3.1`
+- After: `prtInputName.1.1` (OID: 1.3.6.1.2.1.43.8.2.1.13.1.1)
+
+**Benefits**:
+- Network administrators can immediately understand what each metric represents
+- No need to manually look up OID meanings in MIB documentation
+- Works with standard MIBs out-of-the-box (Printer-MIB, IF-MIB, etc.)
 
 ---
 
@@ -551,8 +594,9 @@ opsconductor-nms/
 └── ui/                          # React frontend
     ├── src/
     │   ├── main.tsx
-    │   ├── App.tsx              # Main component
-    │   ├── InventoryGrid.tsx    # Inventory grid component
+    │   ├── App.tsx              # Main component with routing
+    │   ├── InventoryGrid.tsx    # Device inventory grid
+    │   ├── Admin.tsx            # MIB library admin panel
     │   └── index.css
     ├── public/
     ├── package.json
@@ -578,7 +622,17 @@ MIT License - See LICENSE file for details
 
 ## Changelog
 
-### 2025-11-14
+### 2025-11-14 (Latest)
+- **SNMP OID Text Label Resolution**: Implemented automatic OID-to-text conversion using PySNMP MibViewController
+- **Remote MIB Fetching**: Added pysmi package and configured http://mibs.pysnmp.com as MIB source
+- **Standard MIB Loading**: MIB Walker now loads 9 standard MIBs (Printer-MIB, IF-MIB, etc.)
+- **Admin Panel**: Added web interface for MIB library management with search/filter
+- **Manual MIB Walk**: Added "Walk MIB" button in inventory grid for on-demand SNMP walks
+- **MIB Content API**: Added GET /api/mibs/{mib_id} endpoint to retrieve MIB content
+- Updated documentation with new features and technical implementation details
+- Removed backup files (main.py.backup, service.py.bak)
+
+### 2025-11-14 (Earlier)
 - Added comprehensive repo.md documentation
 - Removed outdated IMPLEMENTATION_PLAN.md and GAP_ANALYSIS.md
 - System fully operational with all 9 services running

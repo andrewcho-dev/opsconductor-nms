@@ -24,10 +24,12 @@ OpsConductor NMS automatically:
 - **Automated Discovery**: Passive network observation + active scanning
 - **AI Classification**: LLM (Phi-3) analyzes evidence to classify device types
 - **SNMP Integration**: Automatic SNMP discovery and detailed metric collection
+- **Human-Readable OID Labels**: Resolves numeric SNMP OIDs to text labels (e.g., "prtMarkerLifeCount.1.1")
 - **MAC Vendor Lookup**: IEEE OUI database for vendor identification
-- **MIB Management**: Built-in MIB library with auto-assignment
+- **MIB Management**: Built-in MIB library with auto-assignment and remote MIB fetching
 - **Real-Time Updates**: WebSocket streaming for live inventory changes
-- **IP Inventory Grid**: Searchable, filterable web UI
+- **IP Inventory Grid**: Searchable, filterable web UI with manual MIB walk triggers
+- **Admin Panel**: MIB library management interface with search and filter capabilities
 - **PostgreSQL Backend**: Persistent storage with full audit history
 
 ---
@@ -70,7 +72,7 @@ MAC Enricher  MIB      MIB      LLM
 | **SNMP Discovery** | SNMP queries for device info | ✅ Running |
 | **MAC Enricher** | MAC OUI vendor lookup | ✅ Running |
 | **MIB Assigner** | Automatic MIB assignment | ✅ Running |
-| **MIB Walker** | SNMP tree walking for metrics | ✅ Running |
+| **MIB Walker** | SNMP tree walking with OID text label resolution | ✅ Running |
 | **LLM Analyst** | AI-powered device classification | ✅ Running |
 | **vLLM** | LLM inference engine (Phi-3) | ✅ Running |
 | **UI** | React-based inventory grid | ✅ Running |
@@ -244,6 +246,12 @@ curl -X POST http://localhost:8080/api/inventory/192.168.10.50/confirm \
 curl http://localhost:8080/api/mibs | jq
 ```
 
+#### Get MIB Content
+
+```bash
+curl http://localhost:8080/api/mibs/1 | jq
+```
+
 #### Add New MIB
 
 ```bash
@@ -265,6 +273,14 @@ curl -X POST http://localhost:8080/api/mibs \
 ```bash
 curl -X DELETE http://localhost:8080/api/mibs/1
 ```
+
+#### Trigger Manual MIB Walk
+
+```bash
+curl -X POST http://localhost:8080/api/inventory/192.168.10.50/walk-mib
+```
+
+**Note**: The MIB walker automatically resolves numeric OIDs to human-readable text labels using PySNMP's MIB resolution. Standard MIBs (SNMPv2-MIB, IF-MIB, Printer-MIB, etc.) are loaded automatically from http://mibs.pysnmp.com.
 
 ---
 
@@ -430,8 +446,11 @@ Full API documentation: See [repo.md](./repo.md#api-endpoints)
 - `GET /api/inventory/{ip}` - Get device details
 - `PUT /api/inventory/{ip}` - Update device
 - `POST /api/inventory/{ip}/confirm` - Confirm device type
+- `POST /api/inventory/{ip}/walk-mib` - Trigger manual MIB walk
 - `GET /api/mibs` - List MIBs
+- `GET /api/mibs/{mib_id}` - Get MIB content
 - `POST /api/mibs` - Add MIB
+- `DELETE /api/mibs/{mib_id}` - Delete MIB
 - `GET /graph` - Get topology graph
 - `WS /ws` - WebSocket updates
 
@@ -660,6 +679,16 @@ opsconductor-nms/
 Contributions welcome! Please see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ---
+
+## Recent Updates
+
+### 2025-11-14
+
+- ✅ **SNMP OID Text Label Resolution**: OIDs now display as human-readable labels (e.g., "prtInputName.1.1" instead of "1.1.3.1")
+- ✅ **Remote MIB Fetching**: Automatic MIB download from http://mibs.pysnmp.com for standard MIBs
+- ✅ **Admin Panel**: Web interface for managing MIB library with search and filtering
+- ✅ **Manual MIB Walk**: Trigger on-demand SNMP walks from inventory grid
+- ✅ **MIB Content API**: GET endpoint to retrieve MIB content by ID
 
 ## Roadmap
 
