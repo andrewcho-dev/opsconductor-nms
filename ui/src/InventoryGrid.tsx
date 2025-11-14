@@ -1,0 +1,577 @@
+import { useEffect, useState } from "react";
+
+interface InventoryDevice {
+  id: number;
+  ip_address: string;
+  mac_address: string | null;
+  status: string;
+  device_type: string | null;
+  device_name: string | null;
+  vendor: string | null;
+  model: string | null;
+  open_ports: Record<string, any> | null;
+  snmp_data: Record<string, any> | null;
+  snmp_enabled: boolean;
+  snmp_port: number;
+  snmp_version: string | null;
+  snmp_community: string | null;
+  snmp_username: string | null;
+  snmp_auth_protocol: string | null;
+  snmp_auth_key: string | null;
+  snmp_priv_protocol: string | null;
+  snmp_priv_key: string | null;
+  mib_id: number | null;
+  confidence_score: number | null;
+  classification_notes: string | null;
+  first_seen: string;
+  last_seen: string;
+  last_probed: string | null;
+}
+
+interface InventoryGridProps {
+  apiBase: string;
+}
+
+interface SnmpConfig {
+  snmp_enabled: boolean;
+  snmp_port: number;
+  snmp_version: string;
+  snmp_community: string;
+  snmp_username: string;
+  snmp_auth_protocol: string;
+  snmp_auth_key: string;
+  snmp_priv_protocol: string;
+  snmp_priv_key: string;
+  mib_id: number | null;
+}
+
+interface Mib {
+  id: number;
+  name: string;
+  vendor: string;
+  device_types: string[] | null;
+  version: string | null;
+  description: string | null;
+}
+
+function InventoryGrid({ apiBase }: InventoryGridProps) {
+  const [devices, setDevices] = useState<InventoryDevice[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [sortField, setSortField] = useState<keyof InventoryDevice>("ip_address");
+  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
+  const [filterType, setFilterType] = useState<string>("");
+  const [snmpModalDevice, setSnmpModalDevice] = useState<InventoryDevice | null>(null);
+  const [snmpConfig, setSnmpConfig] = useState<SnmpConfig>({
+    snmp_enabled: true,
+    snmp_port: 161,
+    snmp_version: "2c",
+    snmp_community: "public",
+    snmp_username: "",
+    snmp_auth_protocol: "",
+    snmp_auth_key: "",
+    snmp_priv_protocol: "",
+    snmp_priv_key: "",
+    mib_id: null,
+  });
+  const [suggestedMibs, setSuggestedMibs] = useState<Mib[]>([]);
+  const [allMibs, setAllMibs] = useState<Mib[]>([]);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    loadInventory();
+    loadMibs();
+    const interval = setInterval(loadInventory, 30000);
+    return () => clearInterval(interval);
+  }, [apiBase]);
+
+  const loadInventory = async () => {
+    try {
+      const response = await fetch(`${apiBase}/api/inventory`);
+      if (!response.ok) throw new Error("Failed to fetch inventory");
+      const data = await response.json();
+      setDevices(data);
+      setLoading(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unknown error");
+      setLoading(false);
+    }
+  };
+
+  const loadMibs = async () => {
+    try {
+      const response = await fetch(`${apiBase}/api/mibs`);
+      if (!response.ok) throw new Error("Failed to fetch MIBs");
+      const data = await response.json();
+      setAllMibs(data);
+    } catch (err) {
+      console.error("Failed to load MIBs:", err);
+    }
+  };
+
+  const handleSort = (field: keyof InventoryDevice) => {
+    if (sortField === field) {
+      setSortOrder(sortOrder === "asc" ? "desc" : "asc");
+    } else {
+      setSortField(field);
+      setSortOrder("asc");
+    }
+  };
+
+  const openSnmpModal = async (device: InventoryDevice) => {
+    setSnmpModalDevice(device);
+    setSnmpConfig({
+      snmp_enabled: device.snmp_enabled || false,
+      snmp_port: device.snmp_port || 161,
+      snmp_version: device.snmp_version || "2c",
+      snmp_community: device.snmp_community || "public",
+      snmp_username: device.snmp_username || "",
+      snmp_auth_protocol: device.snmp_auth_protocol || "",
+      snmp_auth_key: device.snmp_auth_key || "",
+      snmp_priv_protocol: device.snmp_priv_protocol || "",
+      snmp_priv_key: device.snmp_priv_key || "",
+      mib_id: device.mib_id || null,
+    });
+
+    try {
+      const response = await fetch(`${apiBase}/api/inventory/${device.ip_address}/mibs/suggestions`);
+      if (response.ok) {
+        const suggestions = await response.json();
+        setSuggestedMibs(suggestions);
+      } else {
+        setSuggestedMibs([]);
+      }
+    } catch (err) {
+      console.error("Failed to load MIB suggestions:", err);
+      setSuggestedMibs([]);
+    }
+  };
+
+  const saveSnmpConfig = async () => {
+    if (!snmpModalDevice) return;
+
+    setSaving(true);
+    try {
+      const response = await fetch(`${apiBase}/api/inventory/${snmpModalDevice.ip_address}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(snmpConfig),
+      });
+
+      if (!response.ok) throw new Error("Failed to save SNMP config");
+
+      await loadInventory();
+      setSnmpModalDevice(null);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to save SNMP config");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const sortedDevices = [...devices].sort((a, b) => {
+    const aVal = a[sortField];
+    const bVal = b[sortField];
+    if (aVal == null && bVal == null) return 0;
+    if (aVal == null) return 1;
+    if (bVal == null) return -1;
+    const comparison = String(aVal).localeCompare(String(bVal));
+    return sortOrder === "asc" ? comparison : -comparison;
+  });
+
+  const filteredDevices = filterType
+    ? sortedDevices.filter((d) => d.device_type === filterType)
+    : sortedDevices;
+
+  const deviceTypes = Array.from(new Set(devices.map((d) => d.device_type).filter((t) => t != null)));
+
+  if (loading) return <div className="inventory-loading">Loading inventory...</div>;
+  if (error) return <div className="inventory-error">Error: {error}</div>;
+
+  return (
+    <div className="inventory-container">
+      <div className="inventory-header">
+        <div className="inventory-filters">
+          <label>
+            Filter by type:
+            <select value={filterType} onChange={(e) => setFilterType(e.target.value)}>
+              <option value="">All</option>
+              {deviceTypes.map((type) => (
+                <option key={type} value={type || ""}>
+                  {type}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button onClick={loadInventory} className="refresh-btn">
+            Refresh
+          </button>
+        </div>
+      </div>
+      <div className="inventory-grid-wrapper">
+        <table className="inventory-table">
+          <thead>
+            <tr>
+              <th onClick={() => handleSort("ip_address")} className="sortable">
+                IP Address {sortField === "ip_address" ? (sortOrder === "asc" ? "▲" : "▼") : ""}
+              </th>
+              <th onClick={() => handleSort("mac_address")} className="sortable">
+                MAC {sortField === "mac_address" ? (sortOrder === "asc" ? "▲" : "▼") : ""}
+              </th>
+              <th onClick={() => handleSort("device_type")} className="sortable">
+                Type {sortField === "device_type" ? (sortOrder === "asc" ? "▲" : "▼") : ""}
+              </th>
+              <th onClick={() => handleSort("vendor")} className="sortable">
+                Vendor {sortField === "vendor" ? (sortOrder === "asc" ? "▲" : "▼") : ""}
+              </th>
+              <th>Services</th>
+              <th onClick={() => handleSort("confidence_score")} className="sortable">
+                Conf {sortField === "confidence_score" ? (sortOrder === "asc" ? "▲" : "▼") : ""}
+              </th>
+              <th onClick={() => handleSort("last_seen")} className="sortable">
+                Last Seen {sortField === "last_seen" ? (sortOrder === "asc" ? "▲" : "▼") : ""}
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {filteredDevices.map((device) => (
+              <tr key={device.id}>
+                <td className="ip-cell">{device.ip_address}</td>
+                <td className="mac-cell">{device.mac_address || "-"}</td>
+                <td className="type-cell">
+                  <span className={`type-badge ${device.device_type || "unknown"}`}>
+                    {(device.device_type || "unknown").split("_")[0]}
+                  </span>
+                </td>
+                <td className="vendor-cell">{device.vendor || "-"}</td>
+                <td className="services-cell">
+                  <div style={{ display: "flex", gap: "0.25rem", flexWrap: "wrap" }}>
+                    {device.open_ports &&
+                      Object.keys(device.open_ports).map((port) => (
+                        <span key={port} className="port-badge">
+                          {port}
+                        </span>
+                      ))}
+                    {device.snmp_data && (
+                      <button
+                        className="snmp-badge snmp-enabled"
+                        onClick={() => openSnmpModal(device)}
+                        title="SNMP Discovered - Click for details"
+                      >
+                        SNMP
+                      </button>
+                    )}
+                    {!device.open_ports && !device.snmp_data && "-"}
+                  </div>
+                </td>
+                <td className="confidence-cell">
+                  {device.confidence_score != null ? (device.confidence_score * 100).toFixed(0) + "%" : "-"}
+                </td>
+                <td className="time-cell">{new Date(device.last_seen).toLocaleString()}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {snmpModalDevice && (
+        <div className="modal-overlay" onClick={() => setSnmpModalDevice(null)}>
+          <div className="modal-content snmp-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>SNMP Configuration - {snmpModalDevice.ip_address}</h3>
+              <button className="modal-close" onClick={() => setSnmpModalDevice(null)}>
+                ×
+              </button>
+            </div>
+            <div className="modal-body" style={{ display: "flex", gap: "1rem", height: "calc(100vh - 200px)" }}>
+              <div style={{ flex: "0 0 400px", overflowY: "auto", paddingRight: "1rem", borderRight: "1px solid #e5e7eb" }}>
+                <h4>SNMP Configuration</h4>
+                <div className="snmp-config-form">
+                  <label className="snmp-checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={snmpConfig.snmp_enabled}
+                      onChange={(e) => setSnmpConfig({ ...snmpConfig, snmp_enabled: e.target.checked })}
+                    />
+                    <span>Enable SNMP</span>
+                  </label>
+
+                  <label>
+                    <span>SNMP Version</span>
+                    <select
+                      value={snmpConfig.snmp_version}
+                      onChange={(e) => setSnmpConfig({ ...snmpConfig, snmp_version: e.target.value })}
+                    >
+                      <option value="1">v1</option>
+                      <option value="2c">v2c</option>
+                      <option value="3">v3</option>
+                    </select>
+                  </label>
+
+                  <label>
+                    <span>SNMP Port</span>
+                    <input
+                      type="number"
+                      value={snmpConfig.snmp_port}
+                      onChange={(e) => setSnmpConfig({ ...snmpConfig, snmp_port: parseInt(e.target.value) || 161 })}
+                    />
+                  </label>
+
+                  <label>
+                    <span>MIB Selection</span>
+                    <select
+                      value={snmpConfig.mib_id || ""}
+                      onChange={(e) => setSnmpConfig({ ...snmpConfig, mib_id: e.target.value ? parseInt(e.target.value) : null })}
+                    >
+                      <option value="">None</option>
+                      {suggestedMibs.length > 0 && (
+                        <optgroup label="Suggested MIBs">
+                          {suggestedMibs.map((mib) => (
+                            <option key={mib.id} value={mib.id}>
+                              {mib.name} ({mib.vendor})
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                      {allMibs.filter(m => !suggestedMibs.find(s => s.id === m.id)).length > 0 && (
+                        <optgroup label="All MIBs">
+                          {allMibs
+                            .filter(m => !suggestedMibs.find(s => s.id === m.id))
+                            .map((mib) => (
+                              <option key={mib.id} value={mib.id}>
+                                {mib.name} ({mib.vendor})
+                              </option>
+                            ))}
+                        </optgroup>
+                      )}
+                    </select>
+                  </label>
+
+                  {(snmpConfig.snmp_version === "1" || snmpConfig.snmp_version === "2c") && (
+                    <label>
+                      <span>Community String</span>
+                      <input
+                        type="text"
+                        value={snmpConfig.snmp_community}
+                        onChange={(e) => setSnmpConfig({ ...snmpConfig, snmp_community: e.target.value })}
+                        placeholder="public"
+                      />
+                    </label>
+                  )}
+
+                  {snmpConfig.snmp_version === "3" && (
+                    <>
+                      <label>
+                        <span>Username</span>
+                        <input
+                          type="text"
+                          value={snmpConfig.snmp_username}
+                          onChange={(e) => setSnmpConfig({ ...snmpConfig, snmp_username: e.target.value })}
+                        />
+                      </label>
+
+                      <label>
+                        <span>Auth Protocol</span>
+                        <select
+                          value={snmpConfig.snmp_auth_protocol}
+                          onChange={(e) => setSnmpConfig({ ...snmpConfig, snmp_auth_protocol: e.target.value })}
+                        >
+                          <option value="">None</option>
+                          <option value="MD5">MD5</option>
+                          <option value="SHA">SHA</option>
+                        </select>
+                      </label>
+
+                      {snmpConfig.snmp_auth_protocol && (
+                        <label>
+                          <span>Auth Key</span>
+                          <input
+                            type="password"
+                            value={snmpConfig.snmp_auth_key}
+                            onChange={(e) => setSnmpConfig({ ...snmpConfig, snmp_auth_key: e.target.value })}
+                          />
+                        </label>
+                      )}
+
+                      <label>
+                        <span>Privacy Protocol</span>
+                        <select
+                          value={snmpConfig.snmp_priv_protocol}
+                          onChange={(e) => setSnmpConfig({ ...snmpConfig, snmp_priv_protocol: e.target.value })}
+                        >
+                          <option value="">None</option>
+                          <option value="DES">DES</option>
+                          <option value="AES">AES</option>
+                        </select>
+                      </label>
+
+                      {snmpConfig.snmp_priv_protocol && (
+                        <label>
+                          <span>Privacy Key</span>
+                          <input
+                            type="password"
+                            value={snmpConfig.snmp_priv_key}
+                            onChange={(e) => setSnmpConfig({ ...snmpConfig, snmp_priv_key: e.target.value })}
+                          />
+                        </label>
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
+              <div style={{ flex: "1", overflowY: "auto", paddingLeft: "1rem" }}>
+                <h4 style={{ marginTop: 0 }}>MIB Data</h4>
+                {snmpModalDevice.snmp_data && (
+                  <>
+                    <div className="snmp-section">
+                      <h5>Basic Information</h5>
+                      <div className="snmp-details">
+                        {Object.entries(snmpModalDevice.snmp_data)
+                          .filter(([key]) => !["interfaces", "storage", "system", "walked_at", "mib_used", "VENDOR_MIB_DATA"].includes(key))
+                          .map(([key, value]) => (
+                            <div key={key} className="snmp-detail-row">
+                              <strong className="snmp-key">{key}:</strong>
+                              <span className="snmp-value">{String(value)}</span>
+                            </div>
+                          ))}
+                      </div>
+                    </div>
+
+                    {snmpModalDevice.snmp_data.interfaces && (
+                      <div className="snmp-section">
+                        <h5>Network Interfaces ({Object.keys(snmpModalDevice.snmp_data.interfaces).length})</h5>
+                        <div style={{ overflowX: "auto" }}>
+                          <table className="snmp-table">
+                            <thead>
+                              <tr>
+                                <th>Index</th>
+                                <th>Description</th>
+                                <th>Type</th>
+                                <th>Speed</th>
+                                <th>Admin</th>
+                                <th>Oper</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {Object.entries(snmpModalDevice.snmp_data.interfaces as Record<string, any>).map(([idx, iface]) => (
+                                <tr key={idx}>
+                                  <td>{idx}</td>
+                                  <td>{iface.description}</td>
+                                  <td>{iface.type}</td>
+                                  <td>{parseInt(iface.speed) >= 1000000000 ? `${parseInt(iface.speed) / 1000000000} Gbps` : parseInt(iface.speed) >= 1000000 ? `${parseInt(iface.speed) / 1000000} Mbps` : `${iface.speed} bps`}</td>
+                                  <td>{iface.admin_status === "1" ? "Up" : "Down"}</td>
+                                  <td>{iface.oper_status === "1" ? "Up" : "Down"}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+
+                    {snmpModalDevice.snmp_data.storage && (
+                      <div className="snmp-section">
+                        <h5>Storage ({Object.keys(snmpModalDevice.snmp_data.storage).length})</h5>
+                        <div style={{ overflowX: "auto" }}>
+                          <table className="snmp-table">
+                            <thead>
+                              <tr>
+                                <th>Index</th>
+                                <th>Description</th>
+                                <th>Units</th>
+                                <th>Size</th>
+                                <th>Used</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {Object.entries(snmpModalDevice.snmp_data.storage as Record<string, any>).map(([idx, store]) => {
+                                const units = parseInt(store.units) || 1;
+                                const size = parseInt(store.size) || 0;
+                                const used = parseInt(store.used) || 0;
+                                const sizeBytes = size * units;
+                                const usedBytes = used * units;
+                                const formatBytes = (bytes: number) => {
+                                  if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(2)} GB`;
+                                  if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(2)} MB`;
+                                  if (bytes >= 1024) return `${(bytes / 1024).toFixed(2)} KB`;
+                                  return `${bytes} B`;
+                                };
+                                return (
+                                  <tr key={idx}>
+                                    <td>{idx}</td>
+                                    <td>{store.description}</td>
+                                    <td>{units} bytes</td>
+                                    <td>{formatBytes(sizeBytes)}</td>
+                                    <td>{formatBytes(usedBytes)}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+
+                    {snmpModalDevice.snmp_data.system && (
+                      <div className="snmp-section">
+                        <h5>System Information</h5>
+                        <div className="snmp-details">
+                          {Object.entries(snmpModalDevice.snmp_data.system as Record<string, any>).map(([key, value]) => (
+                            <div key={key} className="snmp-detail-row">
+                              <strong className="snmp-key">{key}:</strong>
+                              <span className="snmp-value">{String(value)}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {snmpModalDevice.snmp_data.VENDOR_MIB_DATA && (
+                      <div className="snmp-section">
+                        <h5>Vendor-Specific MIB Data ({Object.keys(snmpModalDevice.snmp_data.VENDOR_MIB_DATA).length} OIDs)</h5>
+                        <div style={{ overflowX: "auto", maxHeight: "400px", overflowY: "auto" }}>
+                          <table className="snmp-table">
+                            <thead>
+                              <tr>
+                                <th>OID</th>
+                                <th>Value</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {Object.entries(snmpModalDevice.snmp_data.VENDOR_MIB_DATA as Record<string, any>).map(([oid, value]) => (
+                                <tr key={oid}>
+                                  <td style={{ fontFamily: "monospace", fontSize: "0.85em" }}>{oid}</td>
+                                  <td>{String(value)}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+
+                    {snmpModalDevice.snmp_data.mib_used && (
+                      <div className="snmp-section" style={{ fontSize: "0.85em", color: "#666", marginTop: "1rem" }}>
+                        MIB: {snmpModalDevice.snmp_data.mib_used} | Last walked: {snmpModalDevice.snmp_data.walked_at ? new Date(snmpModalDevice.snmp_data.walked_at as string).toLocaleString() : "Never"}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button className="modal-btn modal-btn-secondary" onClick={() => setSnmpModalDevice(null)}>
+                Cancel
+              </button>
+              <button className="modal-btn" onClick={saveSnmpConfig} disabled={saving}>
+                {saving ? "Saving..." : "Save Configuration"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default InventoryGrid;

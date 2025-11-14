@@ -3,14 +3,35 @@ import copy
 from typing import Any, Dict, List
 
 import jsonpatch
-from sqlalchemy import select
+from sqlalchemy import select, cast
+from sqlalchemy.dialects.postgresql import INET
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .models import GraphState, PatchEvent
-from .schemas import GraphResponse, GraphStatePayload, PatchEventResponse, PatchOperation, PatchRequest
+from .models import DeviceConfirmation, GraphState, IpInventory, Mib, PatchEvent
+from .schemas import (
+    DeviceConfirmationCreate,
+    DeviceConfirmationResponse,
+    GraphResponse,
+    GraphStatePayload,
+    IpInventoryCreate,
+    IpInventoryResponse,
+    IpInventoryUpdate,
+    MibCreate,
+    MibResponse,
+    PatchEventResponse,
+    PatchOperation,
+    PatchRequest,
+    SeedConfigRequest,
+)
 
 
-DEFAULT_GRAPH: Dict[str, Any] = {"nodes": {}, "edges": []}
+DEFAULT_GRAPH: Dict[str, Any] = {
+    "networks": {},
+    "routers": {},
+    "edges": [],
+    "nodes": {},
+    "legacy_edges": []
+}
 
 
 class GraphService:
@@ -44,12 +65,29 @@ class GraphService:
             patch = jsonpatch.JsonPatch(ops)
             target = patch.apply(source, in_place=False)
 
-            # Auto-create missing nodes referenced in edges
-            for edge in target.get("edges", []):
+            for edge in target.get("legacy_edges", []):
                 for ip_key in ["src", "dst"]:
                     ip = edge.get(ip_key)
                     if ip and ip not in target.get("nodes", {}):
                         target.setdefault("nodes", {})[ip] = {"ip": ip, "kind": "host"}
+            
+            for edge in target.get("edges", []):
+                src_net = edge.get("src_network")
+                dst_net = edge.get("dst_network")
+                if src_net and src_net not in target.get("networks", {}):
+                    target.setdefault("networks", {})[src_net] = {
+                        "cidr": src_net,
+                        "label": src_net,
+                        "members": [],
+                        "kind": "unknown"
+                    }
+                if dst_net and dst_net not in target.get("networks", {}):
+                    target.setdefault("networks", {})[dst_net] = {
+                        "cidr": dst_net,
+                        "label": dst_net,
+                        "members": [],
+                        "kind": "unknown"
+                    }
 
             payload = GraphStatePayload.model_validate(target)
             state.graph = payload.model_dump(mode="json")
@@ -100,3 +138,189 @@ class GraphService:
             await session.commit()
             await session.refresh(instance)
         return instance
+
+    async def save_seed_config(self, session: AsyncSession, config: SeedConfigRequest) -> Dict[str, Any]:
+        async with self._lock:
+            state = await self._get_or_create_state(session)
+            state.seed_config = config.model_dump(mode="json")
+            await session.commit()
+            await session.refresh(state)
+            return state.seed_config
+
+    async def get_seed_config(self, session: AsyncSession) -> Dict[str, Any]:
+        state = await self._get_or_create_state(session)
+        return state.seed_config or {}
+
+
+class InventoryService:
+    async def list_ips(
+        self,
+        session: AsyncSession,
+        status: str | None = None,
+        device_type: str | None = None,
+        confirmed: bool | None = None
+    ) -> List[IpInventoryResponse]:
+        query = select(IpInventory)
+        if status:
+            query = query.where(IpInventory.status == status)
+        if device_type:
+            query = query.where(IpInventory.device_type == device_type)
+        if confirmed is not None:
+            query = query.where(IpInventory.device_type_confirmed == confirmed)
+        query = query.order_by(IpInventory.ip_address)
+        result = await session.execute(query)
+        rows = result.scalars().all()
+        return [IpInventoryResponse.model_validate(row) for row in rows]
+
+    async def get_ip(self, session: AsyncSession, ip_address: str) -> IpInventoryResponse | None:
+        result = await session.execute(
+            select(IpInventory).where(IpInventory.ip_address == cast(ip_address, INET))
+        )
+        row = result.scalars().first()
+        return IpInventoryResponse.model_validate(row) if row else None
+
+    async def create_or_update_ip(self, session: AsyncSession, data: IpInventoryCreate) -> IpInventoryResponse:
+        result = await session.execute(
+            select(IpInventory).where(IpInventory.ip_address == cast(data.ip_address, INET))
+        )
+        existing = result.scalars().first()
+        
+        if existing:
+            for key, value in data.model_dump(exclude_unset=True).items():
+                if key != 'ip_address':
+                    setattr(existing, key, value)
+            existing.last_seen = func.now()
+            item = existing
+        else:
+            item = IpInventory(**data.model_dump())
+        
+        session.add(item)
+        await session.commit()
+        await session.refresh(item)
+        return IpInventoryResponse.model_validate(item)
+
+    async def update_ip(self, session: AsyncSession, ip_address: str, data: IpInventoryUpdate) -> IpInventoryResponse:
+        result = await session.execute(
+            select(IpInventory).where(IpInventory.ip_address == cast(ip_address, INET))
+        )
+        item = result.scalars().first()
+        
+        if not item:
+            raise ValueError(f"IP {ip_address} not found")
+        
+        for key, value in data.model_dump(exclude_unset=True).items():
+            setattr(item, key, value)
+        
+        await session.commit()
+        await session.refresh(item)
+        return IpInventoryResponse.model_validate(item)
+
+    async def confirm_device(
+        self,
+        session: AsyncSession,
+        ip_address: str,
+        data: DeviceConfirmationCreate
+    ) -> DeviceConfirmationResponse:
+        result = await session.execute(
+            select(IpInventory).where(IpInventory.ip_address == cast(ip_address, INET))
+        )
+        item = result.scalars().first()
+        
+        if not item:
+            raise ValueError(f"IP {ip_address} not found")
+        
+        item.device_type = data.confirmed_type
+        item.device_type_confirmed = True
+        
+        confirmation = DeviceConfirmation(
+            ip_inventory_id=item.id,
+            **data.model_dump()
+        )
+        session.add(confirmation)
+        await session.commit()
+        await session.refresh(confirmation)
+        return DeviceConfirmationResponse.model_validate(confirmation)
+
+    async def list_mibs(self, session: AsyncSession) -> List[MibResponse]:
+        result = await session.execute(select(Mib).order_by(Mib.vendor, Mib.name))
+        rows = result.scalars().all()
+        return [MibResponse.model_validate(row) for row in rows]
+
+    async def create_mib(self, session: AsyncSession, data: MibCreate) -> MibResponse:
+        mib = Mib(**data.model_dump())
+        session.add(mib)
+        await session.commit()
+        await session.refresh(mib)
+        return MibResponse.model_validate(mib)
+
+    async def delete_mib(self, session: AsyncSession, mib_id: int) -> None:
+        result = await session.execute(select(Mib).where(Mib.id == mib_id))
+        mib = result.scalars().first()
+        
+        if not mib:
+            raise ValueError(f"MIB {mib_id} not found")
+        
+        await session.delete(mib)
+        await session.commit()
+
+    async def suggest_mibs(self, session: AsyncSession, ip_address: str) -> List[MibResponse]:
+        result = await session.execute(
+            select(IpInventory).where(IpInventory.ip_address == cast(ip_address, INET))
+        )
+        device = result.scalars().first()
+        
+        if not device:
+            return []
+        
+        vendor = device.vendor
+        device_type = device.device_type
+        
+        vendor_normalized = self._normalize_vendor(vendor)
+        
+        result = await session.execute(select(Mib).order_by(Mib.vendor, Mib.name))
+        all_mibs = result.scalars().all()
+        
+        matching_mibs = []
+        device_type_lower = device_type.lower() if device_type else None
+        
+        for mib in all_mibs:
+            matches = False
+            
+            if mib.vendor == "IETF":
+                matches = True
+            elif vendor_normalized and mib.vendor and vendor_normalized.lower() in mib.vendor.lower():
+                matches = True
+            
+            if matches and device_type_lower and mib.device_types:
+                device_types_lower = [dt.lower() for dt in mib.device_types]
+                if device_type_lower not in device_types_lower:
+                    matches = False
+            
+            if matches:
+                matching_mibs.append(MibResponse.model_validate(mib))
+        
+        return matching_mibs
+    
+    def _normalize_vendor(self, vendor: str | None) -> str | None:
+        if not vendor:
+            return None
+        
+        vendor_lower = vendor.lower()
+        
+        mappings = {
+            "hewlett": "HP",
+            "hewlett packard": "HP",
+            "hewlett-packard": "HP",
+            "tp-link": "TP-Link",
+            "tplink": "TP-Link",
+            "axis communications": "Axis",
+            "juniper networks": "Juniper",
+            "arista networks": "Arista",
+            "cisco systems": "Cisco",
+        }
+        
+        for key, normalized in mappings.items():
+            if key in vendor_lower:
+                return normalized
+        
+        return vendor.split()[0].title()

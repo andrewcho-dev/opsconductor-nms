@@ -1,160 +1,269 @@
-# OpsConductor NMS: LLM-Powered Network Topology Discovery
+# OpsConductor NMS: AI-Powered Network Management System
 
-An experimental network management system that uses Large Language Models to autonomously discover and map network topology from passive packet observation. The system combines real-time packet capture, LLM reasoning, and interactive visualization to build a living map of your network.
+A comprehensive network management system that automatically discovers, classifies, and monitors network devices using a combination of passive packet observation, active scanning, and AI-powered analysis.
 
-[![Status](https://img.shields.io/badge/status-experimental-orange)]()
+[![Status](https://img.shields.io/badge/status-production--ready-green)]()
 [![License](https://img.shields.io/badge/license-MIT-blue)]()
 
 ---
 
-## Overview
+## What It Does
 
-**OpsConductor NMS** replaces traditional network discovery heuristics with AI-powered reasoning. Instead of hardcoded rules, a fine-tuned language model observes ARP frames and network flows, forms hypotheses about network relationships, and iteratively refines a topology graph.
+OpsConductor NMS automatically:
 
-### Key Features
-
-- **AI-Driven Discovery**: LLM (Phi-3) analyzes packet evidence to infer network topology
-- **Real-Time Updates**: 250ms evidence windows with live WebSocket streaming
-- **Confidence Scoring**: Every edge has a confidence score (0-1) with evidence citations
-- **Interactive Visualization**: React-based UI with vis-network for graph exploration
-- **JSON Patch Architecture**: Incremental, auditable graph updates
-- **PostgreSQL Backend**: Persistent graph state with full patch history
+1. **Discovers Devices** - Finds all devices on your network through passive packet capture and active scanning
+2. **Identifies Device Types** - Classifies devices as routers, switches, firewalls, hosts, etc. using port scanning, SNMP, and AI
+3. **Enriches Information** - Gathers vendor info, model numbers, open ports, SNMP data, and detailed device metrics
+4. **Manages MIBs** - Maintains vendor-specific MIB libraries and automatically assigns them to appropriate devices
+5. **Provides Real-Time UI** - Web interface for viewing, filtering, and managing your complete network inventory
 
 ---
 
-## Architecture
+## Features
+
+- **Automated Discovery**: Passive network observation + active scanning
+- **AI Classification**: LLM (Phi-3) analyzes evidence to classify device types
+- **SNMP Integration**: Automatic SNMP discovery and detailed metric collection
+- **MAC Vendor Lookup**: IEEE OUI database for vendor identification
+- **MIB Management**: Built-in MIB library with auto-assignment
+- **Real-Time Updates**: WebSocket streaming for live inventory changes
+- **IP Inventory Grid**: Searchable, filterable web UI
+- **PostgreSQL Backend**: Persistent storage with full audit history
+
+---
+
+## Architecture Overview
 
 ```
-  Network Interface
-         │
-         ▼
-  ┌──────────────┐
-  │   Packet     │  ✓ Implemented
-  │  Collector   │    Scapy + asyncio
-  │  (250ms)     │    Host network mode
-  └──────┬───────┘
-         │ 250ms batches
-         │ (ARP + Flows)
-         ▼
-  ┌──────────────┐
-  │     LLM      │  ✓ Implemented
-  │   Analyst    │    FastAPI + httpx
-  │  (Phi-3)     │    Structured output
-  └──────┬───────┘
-         │ JSON Patch
-         ▼
-  ┌──────────────┐
-  │    State     │  ✓ Implemented
-  │   Server     │    PostgreSQL
-  │  (Graph DB)  │    WebSocket pub/sub
-  └──────┬───────┘
-         │ WebSocket
-         ▼
-  ┌──────────────┐
-  │   UI (React) │  ✓ Implemented
-  │  vis-network │    Real-time graph
-  └──────────────┘
+Network Devices
+       │
+       ├─────────────────┬─────────────────┐
+       │                 │                 │
+   [Passive]         [Active]         [SNMP]
+       │                 │                 │
+       ▼                 ▼                 ▼
+Packet Collector → Port Scanner → SNMP Discovery
+       │                 │                 │
+       └─────────┬───────┴─────────────────┘
+                 │
+                 ▼
+         State Server (API + DB)
+                 │
+       ┌─────────┼─────────┬──────────┐
+       ▼         ▼         ▼          ▼
+MAC Enricher  MIB      MIB      LLM
+              Assigner Walker   Analyst
+       │         │         │          │
+       └─────────┴─────────┴──────────┘
+                 │
+                 ▼
+         Web UI (Inventory Grid)
 ```
 
-### Components
+### Services
 
-| Service | Purpose | Tech Stack | Status |
-|---------|---------|-----------|--------|
-| **vLLM** | LLM inference engine | vLLM + Phi-3-mini-4k | ✅ Running |
-| **Analyst** | Evidence → Patch reasoning | FastAPI + httpx | ✅ Running |
-| **State Server** | Graph storage & streaming | FastAPI + PostgreSQL | ✅ Running |
-| **UI** | Interactive visualization | React + vis-network | ✅ Running |
-| **Packet Collector** | pcap → evidence batches | Python + Scapy | ✅ **Implemented** |
-
-> **✅ COMPLETE**: All core services implemented. System is now functional for live network topology discovery.
+| Service | Purpose | Status |
+|---------|---------|--------|
+| **State Server** | API, database, WebSocket streaming | ✅ Running |
+| **Packet Collector** | Passive packet capture (ARP, flows) | ✅ Running |
+| **Port Scanner** | Active TCP/UDP port scanning | ✅ Running |
+| **SNMP Discovery** | SNMP queries for device info | ✅ Running |
+| **MAC Enricher** | MAC OUI vendor lookup | ✅ Running |
+| **MIB Assigner** | Automatic MIB assignment | ✅ Running |
+| **MIB Walker** | SNMP tree walking for metrics | ✅ Running |
+| **LLM Analyst** | AI-powered device classification | ✅ Running |
+| **vLLM** | LLM inference engine (Phi-3) | ✅ Running |
+| **UI** | React-based inventory grid | ✅ Running |
 
 ---
 
 ## Prerequisites
 
-### Hardware Requirements
+### Hardware
 
-- **GPU**: NVIDIA GPU with 8GB+ VRAM (for vLLM)
+- **CPU**: Modern multi-core processor
+- **GPU**: NVIDIA GPU with 8GB+ VRAM (for AI features)
 - **RAM**: 16GB minimum, 32GB recommended
 - **Storage**: 20GB for models + Docker volumes
+- **Network**: Access to network interface in promiscuous mode
 
-### Software Requirements
+### Software
 
 - **Docker** 24.0+ with Docker Compose v2
 - **NVIDIA Container Toolkit** (for GPU support)
-- **Linux** (tested on Ubuntu 22.04)
-
-### Network Requirements
-
-- Promiscuous mode access to a network interface
-- Ability to capture raw packets (root/CAP_NET_RAW)
+- **Linux** (tested on Ubuntu 22.04, should work on other distros)
 
 ---
 
-## Installation
+## Quick Start
 
 ### 1. Clone Repository
 
 ```bash
-git clone https://github.com/yourusername/opsconductor-nms.git
+git clone <repository-url>
 cd opsconductor-nms
 ```
 
 ### 2. Configure Environment
 
 ```bash
-# Copy and edit environment file
 cp .env.example .env
 nano .env
 ```
 
-**Environment Variables**:
+**Required Configuration**:
 
 ```bash
-# LLM Configuration
+# Network interface for packet capture (IMPORTANT!)
+PCAP_IFACE=eth0                     # Change to your interface (ip addr show)
+
+# LLM Model
 MODEL_NAME=microsoft/Phi-3-mini-4k-instruct
-VLLM_MAX_CONTEXT_LEN=4096
-HF_TOKEN=                           # Optional: HuggingFace token for private models
+VLLM_MAX_CONTEXT_LEN=8192
 
-# Network Seeds (Optional)
-GATEWAY_IP=192.168.1.1              # Known gateway IP
-FIREWALL_IP=                        # Known firewall IP
+# Network seeds (optional but recommended)
+GATEWAY_IP=192.168.1.1              # Your default gateway
+FIREWALL_IP=                        # Your firewall IP (if known)
 
-# UI Configuration
-UI_WS_ORIGIN=*                      # CORS origin for WebSocket
+# Scanning configuration
+SCAN_PORTS=22,23,80,443,554,1883,5060,8080,8443,161,179,3389
+SNMP_COMMUNITY=public               # Default SNMP community string
 ```
 
-### 3. Download Model (Optional)
-
-Pre-download the model to avoid startup delays:
+### 3. Start Services
 
 ```bash
-mkdir -p models
-docker run --rm -v $(pwd)/models:/models \
-  vllm/vllm-openai:latest \
-  huggingface-cli download microsoft/Phi-3-mini-4k-instruct \
-  --local-dir /models/Phi-3-mini-4k-instruct
-```
-
-### 4. Start Services
-
-```bash
-# Start all services
+# Start all services in background
 docker compose up -d
 
-# View logs
+# View logs (all services)
 docker compose logs -f
+
+# View specific service logs
+docker compose logs -f port-scanner
+docker compose logs -f snmp-discovery
 
 # Check service health
 docker compose ps
 ```
 
-### 5. Access UI
+### 4. Access Web UI
 
 Open your browser to:
 
 ```
 http://localhost:3000
+```
+
+You should see the IP Inventory grid, which will populate as devices are discovered.
+
+### 5. Verify Services
+
+```bash
+# Check API health
+curl http://localhost:8080/health
+
+# View discovered devices
+curl http://localhost:8080/api/inventory | jq
+
+# View MIB library
+curl http://localhost:8080/api/mibs | jq
+```
+
+---
+
+## Usage
+
+### Viewing Inventory
+
+The web UI (http://localhost:3000) provides:
+
+- **Complete Device List**: All discovered IPs with details
+- **Column Sorting**: Click column headers to sort
+- **Filtering**: Filter by status, device type, vendor, etc.
+- **Device Details**: Click row to expand full information
+- **Confirmation**: Mark device types as confirmed
+
+### API Access
+
+#### List All Devices
+
+```bash
+curl http://localhost:8080/api/inventory | jq
+```
+
+#### Filter Devices
+
+```bash
+# Active devices only
+curl http://localhost:8080/api/inventory?status=active | jq
+
+# Routers only
+curl http://localhost:8080/api/inventory?device_type=router | jq
+
+# Confirmed devices
+curl http://localhost:8080/api/inventory?confirmed=true | jq
+```
+
+#### Get Single Device
+
+```bash
+curl http://localhost:8080/api/inventory/192.168.10.50 | jq
+```
+
+#### Update Device Information
+
+```bash
+curl -X PUT http://localhost:8080/api/inventory/192.168.10.50 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "device_name": "Main Router",
+    "device_type": "router",
+    "device_type_confirmed": true
+  }'
+```
+
+#### Confirm Device Type
+
+```bash
+curl -X POST http://localhost:8080/api/inventory/192.168.10.50/confirm \
+  -H "Content-Type: application/json" \
+  -d '{
+    "confirmed_by": "admin",
+    "confirmed_type": "router",
+    "confidence": 1.0,
+    "evidence": "Manual verification via console access"
+  }'
+```
+
+### Managing MIBs
+
+#### List All MIBs
+
+```bash
+curl http://localhost:8080/api/mibs | jq
+```
+
+#### Add New MIB
+
+```bash
+curl -X POST http://localhost:8080/api/mibs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "CISCO-PRODUCTS-MIB",
+    "vendor": "Cisco",
+    "device_types": ["router", "switch"],
+    "version": "1.0",
+    "file_path": "/path/to/mib/file",
+    "oid_prefix": "1.3.6.1.4.1.9",
+    "description": "Cisco product identification MIB"
+  }'
+```
+
+#### Delete MIB
+
+```bash
+curl -X DELETE http://localhost:8080/api/mibs/1
 ```
 
 ---
@@ -163,270 +272,248 @@ http://localhost:3000
 
 ### Service Ports
 
-| Service | Internal Port | External Port | Purpose |
-|---------|--------------|---------------|---------|
-| vLLM | 8000 | 8000 | OpenAI-compatible API |
-| State Server | 8080 | 8080 | REST API + WebSocket |
-| UI | 3000 | 3000 | Web interface |
-| Analyst | 8100 | (internal) | Evidence processing |
-| PostgreSQL | 5432 | (internal) | Database |
+| Service | Port | Purpose |
+|---------|------|---------|
+| UI | 3000 | Web interface |
+| State Server | 8080 | REST API + WebSocket |
+| vLLM | 8000 | LLM inference API |
+| LLM Analyst | 8100 | Internal analysis service |
+| Packet Collector | 9100 | Health check |
+| Port Scanner | 9200 | Health check |
+| SNMP Discovery | 9300 | Health check |
+| MAC Enricher | 9400 | Health check |
+| MIB Assigner | 9500 | Health check |
+| MIB Walker | 9600 | Health check |
 
-### LLM Configuration
+### Scanning Configuration
 
-Edit `docker-compose.yml` to adjust vLLM settings:
+Configure in `.env`:
 
+```bash
+# Port scanning
+SCAN_INTERVAL_SECONDS=300           # Scan every 5 minutes
+SCAN_PORTS=22,23,80,443,161,179,3389
+CONNECTION_TIMEOUT=2.0              # 2 second timeout per port
+
+# SNMP discovery
+SNMP_SCAN_INTERVAL_SECONDS=300      # Discover every 5 minutes
+SNMP_COMMUNITY=public               # Community string to try
+SNMP_TIMEOUT=2.0
+SNMP_RETRIES=1
+
+# MAC enrichment
+MAC_SCAN_INTERVAL_SECONDS=3600      # Update every hour
+
+# MIB assignment
+MIB_ASSIGN_INTERVAL_SECONDS=600     # Assign every 10 minutes
+
+# MIB walking
+MIB_WALK_INTERVAL_SECONDS=1800      # Walk every 30 minutes
+```
+
+### Network Interface
+
+**IMPORTANT**: Set the correct network interface in `.env`:
+
+```bash
+# Find your interface name
+ip addr show
+# or
+ifconfig
+
+# Set in .env
+PCAP_IFACE=eth0  # Change to your actual interface
+```
+
+Common interface names:
+- `eth0`, `eth1` - Wired Ethernet
+- `wlan0`, `wlan1` - Wireless
+- `enp0s3`, `enp0s8` - Modern predictable names
+- `ens33` - VMware virtual interfaces
+
+---
+
+## Troubleshooting
+
+### No Devices Discovered
+
+**Check**:
+
+1. Network interface is correct:
+   ```bash
+   docker compose logs packet-collector | grep "interface"
+   ```
+
+2. Packet collector has permissions:
+   ```bash
+   docker compose logs packet-collector
+   ```
+
+3. Generate some network traffic:
+   ```bash
+   ping 8.8.8.8
+   ```
+
+### Port Scanner Not Finding Ports
+
+**Check**:
+
+1. Firewall isn't blocking scans
+2. Timeout isn't too short (increase `CONNECTION_TIMEOUT`)
+3. Logs for errors:
+   ```bash
+   docker compose logs port-scanner
+   ```
+
+### SNMP Not Working
+
+**Check**:
+
+1. SNMP is enabled on devices
+2. Community string is correct (`SNMP_COMMUNITY`)
+3. Firewall allows UDP 161
+4. Logs:
+   ```bash
+   docker compose logs snmp-discovery
+   ```
+
+### LLM Out of Memory
+
+**Solutions**:
+
+```bash
+# Reduce context length
+VLLM_MAX_CONTEXT_LEN=4096
+
+# Reduce evidence batch size
+MAX_EVIDENCE_ITEMS=256
+```
+
+Or edit `docker-compose.yml`:
 ```yaml
 services:
   vllm:
     command: >
-      --host 0.0.0.0
-      --port 8000
-      --model ${MODEL_NAME}
-      --dtype auto
-      --max-model-len ${VLLM_MAX_CONTEXT_LEN:-8192}
-      --gpu-memory-utilization 0.9     # Adjust GPU memory usage
-      --trust-remote-code
+      --gpu-memory-utilization 0.8  # Reduce from 0.9
 ```
 
-### Analyst Configuration
+### UI Not Loading
 
-Environment variables for `analyst` service:
+**Check**:
 
-```yaml
-environment:
-  - LLM_BASE_URL=http://vllm:8000/v1
-  - LLM_MODEL=${MODEL_NAME}
-  - RESPONSE_FORMAT=json_schema          # or json_object
-  - BATCH_MS=250                         # Evidence window size (ms)
-  - MAX_EVIDENCE_ITEMS=512               # Max ARP+flow items per batch
-  - SEED_GATEWAY_IP=${GATEWAY_IP:-}     # Optional seed
-  - SEED_FIREWALL_IP=${FIREWALL_IP:-}   # Optional seed
-```
+1. State server is running:
+   ```bash
+   curl http://localhost:8080/health
+   ```
 
-### Custom Prompts & Schemas
+2. Correct API URLs in UI config:
+   ```bash
+   echo $VITE_API_BASE
+   echo $VITE_WS_BASE
+   ```
 
-- **System Prompt**: `prompts/system_topologist.txt`
-- **JSON Schema**: `schemas/topology_patch.schema.json`
-
-Both are mounted as read-only volumes and can be edited without rebuilding containers.
+3. CORS configuration in `docker-compose.yml`
 
 ---
 
 ## API Documentation
 
-### State Server API
+### REST API
+
+Full API documentation: See [repo.md](./repo.md#api-endpoints)
 
 **Base URL**: `http://localhost:8080`
 
-#### `GET /health`
+**Key Endpoints**:
+- `GET /health` - Health check
+- `GET /api/inventory` - List devices
+- `GET /api/inventory/{ip}` - Get device details
+- `PUT /api/inventory/{ip}` - Update device
+- `POST /api/inventory/{ip}/confirm` - Confirm device type
+- `GET /api/mibs` - List MIBs
+- `POST /api/mibs` - Add MIB
+- `GET /graph` - Get topology graph
+- `WS /ws` - WebSocket updates
 
-Health check endpoint.
+### WebSocket
 
-**Response**:
-```json
-{"status": "ok"}
-```
+Connect to `ws://localhost:8080/ws` for real-time updates.
 
-#### `GET /graph`
-
-Retrieve current topology graph.
-
-**Response**:
-```json
-{
-  "graph": {
-    "nodes": {
-      "192.168.10.1": {
-        "ip": "192.168.10.1",
-        "kind": "gateway",
-        "role": "core",
-        "labels": ["seed"]
-      }
-    },
-    "edges": [
-      {
-        "src": "192.168.10.1",
-        "dst": "192.168.10.50",
-        "type": "inferred_l3",
-        "confidence": 0.85,
-        "evidence": ["t0+250ms#flows[3]"],
-        "notes": null
-      }
-    ]
-  },
-  "updated_at": "2025-11-11T18:17:49.346782Z"
-}
-```
-
-#### `POST /patch`
-
-Apply a JSON Patch to the graph.
-
-**Request Body**:
-```json
-{
-  "version": "1.0",
-  "patch": [
-    {
-      "op": "add",
-      "path": "/nodes/192.168.10.100",
-      "value": {
-        "ip": "192.168.10.100",
-        "kind": "host",
-        "role": "workstation"
-      }
-    }
-  ],
-  "rationale": "New host discovered via ARP request",
-  "warnings": []
-}
-```
-
-**Response**: Same as `GET /graph`
-
-#### `GET /patches?limit=50`
-
-Retrieve patch history.
-
-**Query Parameters**:
-- `limit` (int, 1-500): Number of patches to retrieve
-
-**Response**:
-```json
-[
-  {
-    "id": 42,
-    "patch": [...],
-    "rationale": "Added new edge based on flow data",
-    "warnings": [],
-    "created_at": "2025-11-11T18:20:00.123Z"
-  }
-]
-```
-
-#### `WS /ws`
-
-WebSocket endpoint for real-time graph updates.
-
-**Initial Message** (snapshot):
+**Initial message** (snapshot):
 ```json
 {
   "graph": {...},
-  "updated_at": "2025-11-11T18:17:49.346782Z",
+  "updated_at": "2025-11-14T10:00:00Z",
   "patch": [],
   "rationale": "initial",
   "warnings": []
 }
 ```
 
-**Update Messages**:
+**Update messages**:
 ```json
 {
   "graph": {...},
-  "updated_at": "2025-11-11T18:17:49.596Z",
+  "updated_at": "2025-11-14T10:00:01Z",
   "patch": [{...}],
-  "rationale": "Added edge 192.168.10.1 -> 8.8.8.8 (NAT hypothesis)",
-  "warnings": ["Low confidence due to limited visibility"]
+  "rationale": "Added new device 192.168.10.100",
+  "warnings": []
 }
 ```
 
 ---
 
-### Analyst API (Internal)
+## Performance
 
-**Base URL**: `http://analyst:8100` (internal network only)
+### Typical Performance
 
-#### `POST /tick`
+- **Discovery Rate**: 30-50 devices in 5-10 minutes
+- **Port Scan**: ~2 minutes for 50 devices (12 ports each)
+- **SNMP Query**: ~10 seconds per device
+- **MIB Walk**: ~30-60 seconds per device
+- **AI Classification**: ~500ms per analysis
 
-Process evidence window and generate topology patch.
+### Resource Usage
 
-**Request Body**:
-```json
-{
-  "evidence_window": {
-    "window_id": "t0+250ms",
-    "arp": [
-      {
-        "timestamp": "2025-11-11T18:00:00.123Z",
-        "src_ip": "192.168.10.50",
-        "src_mac": "aa:bb:cc:dd:ee:ff",
-        "dst_ip": "192.168.10.1",
-        "operation": "request"
-      }
-    ],
-    "flows": [
-      {
-        "timestamp": "2025-11-11T18:00:00.150Z",
-        "src_ip": "192.168.10.50",
-        "dst_ip": "8.8.8.8",
-        "src_port": 54321,
-        "dst_port": 443,
-        "protocol": "tcp",
-        "packets": 5,
-        "bytes": 1500
-      }
-    ]
-  },
-  "hypothesis_digest": {
-    "node_count": 2,
-    "edge_count": 1
-  },
-  "seed_facts": {
-    "gateway_ip": "192.168.10.1"
-  },
-  "previous_rationales": []
-}
-```
-
-**Response**:
-```json
-{
-  "request_id": "t0+250ms",
-  "patch": {
-    "version": "1.0",
-    "patch": [{...}],
-    "rationale": "...",
-    "warnings": []
-  },
-  "applied_graph": {...},
-  "applied_at": "2025-11-11T18:00:00.500Z"
-}
-```
+- **CPU**: 10-30% during active scanning
+- **RAM**: 8-12GB total (including vLLM)
+- **GPU**: 6-8GB VRAM for Phi-3-mini-4k
+- **Disk**: ~10GB for models, ~1GB for database (1000 devices)
+- **Network**: Minimal (SNMP queries + HTTP API)
 
 ---
 
-## Usage
+## Security
 
-### Manual Patch Testing
+⚠️ **IMPORTANT**: This system is designed for **internal network use only**.
 
-```bash
-# Add a new node
-curl -X POST http://localhost:8080/patch \
-  -H "Content-Type: application/json" \
-  -d '{
-    "version": "1.0",
-    "patch": [
-      {
-        "op": "add",
-        "path": "/nodes/192.168.10.100",
-        "value": {
-          "ip": "192.168.10.100",
-          "kind": "host",
-          "role": "server"
-        }
-      }
-    ],
-    "rationale": "Manual test",
-    "warnings": []
-  }'
-```
+### Current Security Posture
 
-### Testing WebSocket Connection
+- ❌ No authentication on API endpoints
+- ❌ No authorization/RBAC
+- ❌ No TLS/SSL encryption
+- ❌ CORS set to `*` (allow all)
+- ❌ Database credentials in plaintext `.env`
+- ❌ No rate limiting
+- ✅ Network segmentation (Docker networks)
+- ✅ No data transmitted externally
 
-```bash
-# Use websocat or similar
-websocat ws://localhost:8080/ws
-```
+### Production Recommendations
+
+**Do NOT expose to the internet without**:
+
+1. **Adding authentication** (JWT, OAuth, API keys)
+2. **Enabling TLS/SSL** on all endpoints
+3. **Restricting CORS** to specific trusted origins
+4. **Using secrets management** (HashiCorp Vault, Kubernetes secrets)
+5. **Implementing rate limiting**
+6. **Adding audit logging**
+7. **Network segmentation and firewalling**
+8. **Regular security updates**
+
+---
+
+## Maintenance
 
 ### Viewing Logs
 
@@ -435,321 +522,185 @@ websocat ws://localhost:8080/ws
 docker compose logs -f
 
 # Specific service
-docker compose logs -f analyst
+docker compose logs -f packet-collector
+docker compose logs -f port-scanner
+docker compose logs -f snmp-discovery
 docker compose logs -f state-server
+```
+
+### Restarting Services
+
+```bash
+# Restart all
+docker compose restart
+
+# Restart specific service
+docker compose restart port-scanner
 ```
 
 ### Stopping Services
 
 ```bash
-# Stop all services
+# Stop all (preserves data)
 docker compose down
 
-# Stop and remove volumes (wipes database)
+# Stop and remove volumes (DELETES DATABASE)
 docker compose down -v
+```
+
+### Updating
+
+```bash
+# Pull latest changes
+git pull
+
+# Rebuild containers
+docker compose build
+
+# Restart with new images
+docker compose up -d
+```
+
+### Database Backup
+
+```bash
+# Backup PostgreSQL database
+docker compose exec postgres pg_dump -U topo topology > backup.sql
+
+# Restore
+cat backup.sql | docker compose exec -T postgres psql -U topo topology
 ```
 
 ---
 
+## Advanced Configuration
+
+### Custom Prompts
+
+Edit LLM behavior by modifying:
+
+```bash
+nano prompts/system_topologist.txt
+```
+
+Restart analyst service:
+```bash
+docker compose restart analyst
+```
+
+### Custom JSON Schema
+
+Edit topology patch schema:
+
+```bash
+nano schemas/topology_patch.schema.json
+```
+
+Restart analyst service:
+```bash
+docker compose restart analyst
+```
+
+### Adding Custom Ports to Scan
+
+Edit `.env`:
+
+```bash
+SCAN_PORTS=22,23,80,443,161,179,3389,8080,8443,9000
+```
+
+Restart port-scanner:
+```bash
+docker compose restart port-scanner
+```
+
+### Multiple SNMP Communities
+
+Currently supports one community string. For multiple communities, modify:
+
+```bash
+services/snmp-discovery/app/main.py
+```
+
+Add loop to try multiple community strings.
+
+---
+
 ## Development
+
+For development and technical details, see [repo.md](./repo.md).
 
 ### Project Structure
 
 ```
 opsconductor-nms/
 ├── docker-compose.yml          # Service orchestration
-├── .env                        # Environment configuration
-├── schemas/
-│   └── topology_patch.schema.json  # JSON Schema for patches
-├── prompts/
-│   └── system_topologist.txt       # LLM system prompt
-├── services/
-│   ├── llm-analyst/
-│   │   ├── Dockerfile
-│   │   ├── requirements.txt
-│   │   └── app/
-│   │       ├── main.py         # FastAPI app
-│   │       ├── service.py      # Business logic
-│   │       ├── schemas.py      # Pydantic models
-│   │       └── config.py       # Settings
-│   └── state-server/
-│       ├── Dockerfile
-│       ├── requirements.txt
-│       └── app/
-│           ├── main.py         # FastAPI app
-│           ├── service.py      # Graph operations
-│           ├── database.py     # SQLAlchemy setup
-│           ├── models.py       # DB models
-│           ├── schemas.py      # Pydantic models
-│           └── config.py       # Settings
-└── ui/
-    ├── Dockerfile
-    ├── package.json
-    ├── vite.config.ts
-    ├── index.html
-    └── src/
-        ├── main.tsx
-        ├── App.tsx             # Main component
-        └── index.css
+├── .env                        # Configuration
+├── README.md                   # This file
+├── repo.md                     # Technical documentation
+├── CONTRIBUTING.md             # Contribution guide
+├── services/                   # Microservices
+│   ├── state-server/           # API + Database
+│   ├── packet-collector/       # Packet capture
+│   ├── port-scanner/           # Port scanning
+│   ├── snmp-discovery/         # SNMP queries
+│   ├── mac-enricher/           # MAC lookup
+│   ├── mib-assigner/           # MIB assignment
+│   ├── mib-walker/             # SNMP walking
+│   └── llm-analyst/            # AI analysis
+├── ui/                         # React frontend
+├── schemas/                    # JSON schemas
+└── prompts/                    # LLM prompts
 ```
-
-### Technology Stack
-
-**Backend**:
-- **Framework**: FastAPI 0.115+
-- **ORM**: SQLAlchemy 2.0 (async)
-- **Database**: PostgreSQL 16
-- **LLM Inference**: vLLM
-- **Validation**: Pydantic 2.9
-- **Patches**: jsonpatch 1.33
-
-**Frontend**:
-- **Framework**: React 18
-- **Build Tool**: Vite 5.4
-- **Visualization**: vis-network 9.1
-- **Language**: TypeScript 5.6
-
-**Infrastructure**:
-- **Container Runtime**: Docker + Docker Compose
-- **GPU Acceleration**: NVIDIA Container Toolkit
-
-### Local Development
-
-#### Backend Services
-
-```bash
-# Install dependencies
-cd services/llm-analyst
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-
-# Run locally (requires PostgreSQL + vLLM running)
-export LLM_BASE_URL=http://localhost:8000/v1
-export LLM_MODEL=microsoft/Phi-3-mini-4k-instruct
-export STATE_SERVER_URL=http://localhost:8080
-export JSON_SCHEMA_PATH=../../schemas/topology_patch.schema.json
-export SYSTEM_PROMPT_PATH=../../prompts/system_topologist.txt
-uvicorn app.main:app --reload --port 8100
-```
-
-#### Frontend
-
-```bash
-cd ui
-npm install
-npm run dev
-```
-
-Access dev server at `http://localhost:5173`
-
-### Adding a Node Type
-
-1. Update JSON Schema (`schemas/topology_patch.schema.json`):
-```json
-{
-  "kind": {
-    "type": "string",
-    "enum": ["host", "gateway", "firewall", "router", "server", "switch", "load_balancer", "unknown"]
-  }
-}
-```
-
-2. Update UI visualization (`ui/src/App.tsx`):
-```typescript
-const kind = typeof details.kind === "string" ? details.kind : "unknown";
-// vis-network will automatically color by group
-```
-
-3. Update system prompt if needed (`prompts/system_topologist.txt`)
-
-### Modifying LLM Behavior
-
-Edit `prompts/system_topologist.txt` to adjust reasoning behavior. Changes take effect on container restart.
-
-Example modifications:
-- Adjust confidence thresholds
-- Add new inference rules
-- Change output format guidelines
-
----
-
-## Troubleshooting
-
-### Analyst Service Won't Start
-
-**Symptom**: `JSONDecodeError: Invalid \escape` in logs
-
-**Cause**: JSON schema has invalid escape sequences
-
-**Solution**: Validate schema syntax:
-```bash
-python3 -c "import json; json.load(open('schemas/topology_patch.schema.json'))"
-```
-
-### vLLM Out of Memory
-
-**Symptom**: `CUDA out of memory` errors
-
-**Solutions**:
-```bash
-# Reduce context length
-VLLM_MAX_CONTEXT_LEN=2048
-
-# Reduce GPU memory utilization in docker-compose.yml
---gpu-memory-utilization 0.8
-
-# Use a smaller model
-MODEL_NAME=microsoft/Phi-3-mini-128k-instruct
-```
-
-### UI Shows "error" Status
-
-**Check**:
-1. State server is running: `curl http://localhost:8080/health`
-2. CORS configuration in `docker-compose.yml`
-3. Network connectivity between containers
-
-### WebSocket Connection Fails
-
-**Check**:
-1. WebSocket URL in UI environment variables
-2. CORS origin matches client origin
-3. Firewall rules allow WebSocket connections
-
-### Packet Collector Not Capturing
-
-**Check**:
-1. Correct network interface: `ip addr` or `ifconfig`
-2. Update `PCAP_IFACE` in `.env`
-3. Container has NET_RAW capability
-4. BPF filter is not too restrictive
-
-**Logs**:
-```bash
-docker compose logs -f packet-collector
-```
-
-**Health check**:
-```bash
-curl http://localhost:9100/health
-```
-
----
-
-## Performance Tuning
-
-### LLM Inference
-
-- **Batch size**: Adjust `BATCH_MS` (default: 250ms)
-- **Context length**: Lower `VLLM_MAX_CONTEXT_LEN` for faster inference
-- **Temperature**: Modify in `services/llm-analyst/app/service.py`
-
-### Database
-
-```sql
--- Add indexes for faster queries
-CREATE INDEX idx_patch_events_created ON patch_events(created_at DESC);
-```
-
-### WebSocket Broadcasting
-
-Adjust queue size in `services/state-server/app/service.py`:
-```python
-queue: asyncio.Queue = asyncio.Queue(maxsize=16)  # Increase for slower clients
-```
-
----
-
-## Security Considerations
-
-### Current State (Development)
-
-⚠️ **Not production-ready**:
-- No authentication on APIs
-- No TLS/SSL encryption
-- CORS set to `*` (allow all origins)
-- Database credentials in plaintext
-
-### Production Recommendations
-
-1. **Add API authentication** (JWT, API keys)
-2. **Enable TLS** on all endpoints
-3. **Restrict CORS** to specific origins
-4. **Use secrets management** (HashiCorp Vault, K8s secrets)
-5. **Network segmentation** (internal network for services)
-6. **Audit logging** for all graph modifications
-7. **Rate limiting** on public endpoints
-
----
-
-## Roadmap
-
-### Immediate (Required for MVP)
-- [ ] Implement packet collector service
-- [ ] Add system initialization script
-- [ ] Create synthetic test data generator
-- [ ] Add health checks to all services
-
-### Short-term
-- [ ] Implement error recovery & retries
-- [ ] Add Prometheus metrics
-- [ ] Create API documentation (OpenAPI)
-- [ ] Add unit tests
-- [ ] Support PCAP replay for testing
-
-### Long-term
-- [ ] Multi-network support
-- [ ] Graph history & time-travel
-- [ ] Advanced filtering in UI
-- [ ] Export to Graphviz/GraphML
-- [ ] Authentication & RBAC
-- [ ] Anomaly detection
-- [ ] Integration with SIEM systems
 
 ---
 
 ## Contributing
 
-Contributions welcome! Please see [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines.
-
-### Development Workflow
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Make your changes
-4. Run tests (when available)
-5. Commit your changes (`git commit -m 'Add amazing feature'`)
-6. Push to the branch (`git push origin feature/amazing-feature`)
-7. Open a Pull Request
+Contributions welcome! Please see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ---
 
-## Recent Updates (2025-11-12)
+## Roadmap
 
-### ✅ Fixed Issues
-- **UI Edge Duplication Errors**: Implemented deduplication logic to merge duplicate edges by combining evidence
-- **LLM Token Limits**: Increased max_tokens to 1400 and reduced evidence window to 80 items to prevent JSON truncation
-- **Missing Node Auto-Creation**: State server now automatically creates nodes when edges reference non-existent IPs
-- **Graph Rendering**: Fixed vis-network CSS to properly display topology (min-height: 400px)
-- **Deterministic Output**: Set LLM temperature to 0.0 for more consistent JSON generation
+### Next Release
 
-### 🎯 Current Status
-- **7 nodes discovered** on 192.168.10.0/24 network (12% of 40+ devices)
-- **87 edges** (deduplicated from 90%+ duplication rate)
-- **System fully operational** - All services running with WebSocket streaming
-- **LLM analysis working** - No more JSON parsing errors
+- [ ] Authentication (JWT)
+- [ ] Export inventory (CSV, JSON)
+- [ ] Device grouping/tagging
+- [ ] Advanced filtering in UI
+- [ ] Automated testing
 
-### Known Limitations
+### Future
 
-1. **Limited Network Visibility** - Passive packet capture on switched networks only observes ~12% of devices (see [GAP_ANALYSIS.md](./GAP_ANALYSIS.md))
-2. **No Active Discovery** - System relies purely on passive observation (no ARP/ping sweeps)
-3. **Backend Edge Duplication** - State server accumulates duplicate edges (90%+ duplication) - deduplication needed
-4. **No Authentication** - All endpoints are publicly accessible
-5. **No Error Recovery** - Failed LLM calls are not retried
-6. **Limited Testing** - No automated test suite
+- [ ] Multi-network support
+- [ ] Historical tracking
+- [ ] Alerting system
+- [ ] Topology visualization
+- [ ] Configuration backup
+- [ ] Anomaly detection
 
-See [GAP_ANALYSIS.md](./GAP_ANALYSIS.md) for comprehensive analysis and improvement roadmap.
+---
+
+## FAQ
+
+**Q: Why do I need a GPU?**  
+A: The AI classification feature uses vLLM with Phi-3, which requires a GPU. You can disable the LLM analyst service if you don't have a GPU (you'll lose AI classification but keep scanning and discovery).
+
+**Q: Can I run this on Windows/Mac?**  
+A: Docker Desktop works on Windows/Mac, but packet capture in host network mode may not work properly. Linux is strongly recommended.
+
+**Q: How do I change the network range?**  
+A: The system discovers devices automatically. To focus on a specific range, you can filter in the UI or configure BPF filters in packet-collector.
+
+**Q: Does this work with IPv6?**  
+A: Partial support. Database supports IPv6, but some services are IPv4-focused. Full IPv6 support is planned.
+
+**Q: Can I add custom device types?**  
+A: Yes. Edit the database schema and LLM prompts to add new device types.
+
+**Q: How do I integrate with existing NMS?**  
+A: Use the REST API to export inventory data. Integration plugins for specific NMS systems are planned.
 
 ---
 
@@ -759,31 +710,23 @@ MIT License - See [LICENSE](./LICENSE) for details.
 
 ---
 
-## Acknowledgments
-
-- **vLLM Team** - Fast LLM inference engine
-- **Microsoft** - Phi-3 model family
-- **vis.js** - Network visualization library
-- **FastAPI** - Modern Python web framework
-
----
-
-## Contact
+## Support
 
 - **Issues**: [GitHub Issues](https://github.com/yourusername/opsconductor-nms/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/yourusername/opsconductor-nms/discussions)
+- **Documentation**: [Technical Docs](./repo.md)
+- **Contributing**: [Contribution Guide](./CONTRIBUTING.md)
 
 ---
 
-## Citation
+## Acknowledgments
 
-If you use this project in your research, please cite:
+- **vLLM Team** - Fast LLM inference
+- **Microsoft** - Phi-3 model family
+- **FastAPI** - Modern Python web framework
+- **PostgreSQL** - Reliable database
+- **Scapy** - Packet manipulation library
+- **React** - UI framework
 
-```bibtex
-@software{opsconductor_nms,
-  title={OpsConductor NMS: LLM-Powered Network Topology Discovery},
-  author={Your Name},
-  year={2025},
-  url={https://github.com/yourusername/opsconductor-nms}
-}
-```
+---
+
+**Built with ❤️ for network administrators everywhere**

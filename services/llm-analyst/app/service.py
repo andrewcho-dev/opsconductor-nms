@@ -1,5 +1,6 @@
 import json
 import logging
+import ipaddress
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
@@ -11,6 +12,128 @@ from .schemas import AnalystResponse, InferenceInput, PatchEnvelope
 from .json_repair import repair_truncated_json
 
 logger = logging.getLogger(__name__)
+
+STATE_SERVER_URL = "http://state-server:8080"
+
+
+def is_external_ip(ip_str: str) -> bool:
+    """Check if an IP address is external (non-RFC1918 private address)."""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+        if ip.is_private or ip.is_loopback or ip.is_link_local:
+            return False
+        return True
+    except ValueError:
+        return False
+
+
+def replace_external_ips(flows: list, arps: list) -> tuple[list, list]:
+    """Replace all external IP addresses with 'Internet' in flows and ARP records."""
+    modified_flows = []
+    for flow in flows:
+        flow_copy = flow.copy()
+        if flow_copy.get("src_ip") and is_external_ip(flow_copy["src_ip"]):
+            flow_copy["src_ip"] = "Internet"
+        if flow_copy.get("dst_ip") and is_external_ip(flow_copy["dst_ip"]):
+            flow_copy["dst_ip"] = "Internet"
+        modified_flows.append(flow_copy)
+    
+    modified_arps = []
+    for arp in arps:
+        arp_copy = arp.copy()
+        if arp_copy.get("sender_ip") and is_external_ip(arp_copy["sender_ip"]):
+            arp_copy["sender_ip"] = "Internet"
+        if arp_copy.get("target_ip") and is_external_ip(arp_copy["target_ip"]):
+            arp_copy["target_ip"] = "Internet"
+        modified_arps.append(arp_copy)
+    
+    return modified_flows, modified_arps
+
+
+def discover_networks(all_ips: set[str], seed_config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Discover networks by grouping IPs into subnets."""
+    networks = {}
+    
+    if seed_config.get("subnetMask"):
+        subnet_mask = seed_config["subnetMask"]
+        prefix_len = sum([bin(int(octet)).count('1') for octet in subnet_mask.split('.')])
+        
+        for ip_str in all_ips:
+            if ip_str == "Internet":
+                continue
+            try:
+                ip = ipaddress.ip_address(ip_str)
+                network = ipaddress.ip_network(f"{ip}/{prefix_len}", strict=False)
+                network_key = str(network)
+                
+                if network_key not in networks:
+                    networks[network_key] = {
+                        "cidr": network_key,
+                        "label": f"Network {network_key}",
+                        "members": [],
+                        "kind": "internal",
+                        "inferred_mask": f"/{prefix_len}"
+                    }
+                networks[network_key]["members"].append(ip_str)
+            except (ValueError, TypeError):
+                pass
+    else:
+        private_ips = [ip for ip in all_ips if ip != "Internet" and not is_external_ip(ip)]
+        if private_ips:
+            network_key = "internal"
+            networks[network_key] = {
+                "cidr": None,
+                "label": "Internal Network",
+                "members": list(private_ips),
+                "kind": "internal",
+                "inferred_mask": None
+            }
+    
+    if "Internet" in all_ips:
+        networks["Internet"] = {
+            "cidr": None,
+            "label": "Internet",
+            "members": [],
+            "kind": "external",
+            "inferred_mask": None
+        }
+    
+    return networks
+
+
+def identify_routers(flows: list, networks: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """Identify routers as IPs that bridge networks."""
+    routers = {}
+    
+    ip_to_network = {}
+    for net_key, net_info in networks.items():
+        for member_ip in net_info["members"]:
+            ip_to_network[member_ip] = net_key
+    
+    for flow in flows:
+        src_ip = flow.get("src_ip")
+        dst_ip = flow.get("dst_ip")
+        
+        if not src_ip or not dst_ip:
+            continue
+        
+        src_net = ip_to_network.get(src_ip)
+        dst_net = "Internet" if dst_ip == "Internet" else ip_to_network.get(dst_ip)
+        
+        if src_net and dst_net and src_net != dst_net:
+            gateway_candidates = [src_ip, dst_ip]
+            for candidate in gateway_candidates:
+                if candidate == "Internet":
+                    continue
+                if candidate not in routers:
+                    routers[candidate] = {
+                        "ip": candidate,
+                        "label": f"Router {candidate}",
+                        "kind": "router",
+                        "interfaces": [candidate]
+                    }
+    
+    return routers
 
 
 class AnalystService:
@@ -45,6 +168,13 @@ class AnalystService:
             trimmed = arps[: settings.max_arp_items]
             logger.debug("Trimming ARP entries from %d to %d", len(arps), len(trimmed))
             evidence_window["arp"] = trimmed
+        
+        flows = evidence_window.get("flows") or []
+        arps = evidence_window.get("arp") or []
+        modified_flows, modified_arps = replace_external_ips(flows, arps)
+        evidence_window["flows"] = modified_flows
+        evidence_window["arp"] = modified_arps
+        
         total_items = len(evidence_window.get("arp", [])) + len(evidence_window.get("flows", []))
         if total_items > settings.max_evidence_items:
             raise ValueError("evidence window exceeds max_evidence_items")
@@ -59,10 +189,43 @@ class AnalystService:
             request_body.setdefault("seed_facts", {})["gateway_ip"] = settings.seed_gateway_ip
         if settings.seed_firewall_ip and "firewall_ip" not in request_body.get("seed_facts", {}):
             request_body.setdefault("seed_facts", {})["firewall_ip"] = settings.seed_firewall_ip
-        confirmed_ips, node_kinds = self._derive_device_candidates(request_body)
-        patch_data = await self._invoke_llm(request_body, confirmed_ips, node_kinds)
-        sanitized = await self._sanitize_patch(patch_data, confirmed_ips, node_kinds)
-        envelope = PatchEnvelope.model_validate(sanitized)
+        
+        seed_config = await self._fetch_seed_config()
+        confirmed_ips, node_kinds = self._derive_device_candidates(request_body, seed_config)
+        
+        all_ips = set()
+        for flow in modified_flows:
+            if flow.get("src_ip"):
+                all_ips.add(flow.get("src_ip"))
+            if flow.get("dst_ip"):
+                all_ips.add(flow.get("dst_ip"))
+        for arp in modified_arps:
+            if arp.get("sender_ip"):
+                all_ips.add(arp.get("sender_ip"))
+        
+        networks = discover_networks(all_ips, seed_config)
+        routers = identify_routers(modified_flows, networks)
+        
+        if seed_config.get("defaultGateway") and seed_config["defaultGateway"] in all_ips:
+            gw_ip = seed_config["defaultGateway"]
+            routers[gw_ip] = {
+                "ip": gw_ip,
+                "label": "Gateway",
+                "kind": "gateway",
+                "interfaces": [gw_ip]
+            }
+        
+        if seed_config.get("firewallGateway") and seed_config["firewallGateway"] in all_ips:
+            fw_ip = seed_config["firewallGateway"]
+            routers[fw_ip] = {
+                "ip": fw_ip,
+                "label": "Firewall",
+                "kind": "firewall",
+                "interfaces": [fw_ip]
+            }
+        
+        l3_patch_data = self._generate_l3_patch(networks, routers, modified_flows, seed_config)
+        envelope = PatchEnvelope.model_validate(l3_patch_data)
         applied = await self._apply_patch(envelope)
         return AnalystResponse(
             request_id=payload.evidence_window.window_id,
@@ -71,11 +234,28 @@ class AnalystService:
             applied_at=datetime.now(timezone.utc).isoformat(),
         )
 
-    async def _invoke_llm(self, request_body: Dict[str, Any], confirmed_ips: set[str], node_kinds: dict[str, str]) -> Dict[str, Any]:
+    async def _invoke_llm(self, request_body: Dict[str, Any], confirmed_ips: set[str], node_kinds: dict[str, str], seed_config: Dict[str, Any]) -> Dict[str, Any]:
         if self._client is None:
             raise RuntimeError("HTTP client is not initialized")
+        
+        system_prompt = self._system_prompt
+        if seed_config:
+            hints = []
+            if seed_config.get("defaultGateway"):
+                hints.append(f"Default gateway: {seed_config['defaultGateway']}")
+            if seed_config.get("subnetMask"):
+                hints.append(f"Subnet mask: {seed_config['subnetMask']}")
+            if seed_config.get("firewallGateway"):
+                hints.append(f"Firewall/Internet gateway: {seed_config['firewallGateway']}")
+            if seed_config.get("switchIps"):
+                hints.append(f"Known L2 switches: {seed_config['switchIps']}")
+            
+            if hints:
+                hint_text = "\n".join(hints)
+                system_prompt += f"\n\nSEED HINTS (validate with evidence): {hint_text}"
+        
         messages = [
-            {"role": "system", "content": self._system_prompt},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": json.dumps(request_body, separators=(",", ":"))},
         ]
         payload = {
@@ -83,7 +263,7 @@ class AnalystService:
             "messages": messages,
             "temperature": 0.0,
             "top_p": 0.9,
-            "max_tokens": 1200,
+            "max_tokens": 800,
         }
         if settings.response_format == "json_schema" and self._schema is not None:
             payload["response_format"] = {
@@ -320,6 +500,17 @@ class AnalystService:
             return graph
         return {}
 
+    async def _fetch_seed_config(self) -> Dict[str, Any]:
+        if self._client is None:
+            raise RuntimeError("HTTP client is not initialized")
+        try:
+            response = await self._client.get(f"{settings.state_server_url.rstrip('/')}/seed")
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            logger.warning(f"Failed to fetch seed config: {e}")
+            return {}
+
     def _is_link_local(self, ip: str) -> bool:
         if ip.startswith("169.254."):
             return True
@@ -327,7 +518,7 @@ class AnalystService:
             return True
         return False
 
-    def _derive_device_candidates(self, request_body: Dict[str, Any]) -> tuple[set[str], dict[str, str]]:
+    def _derive_device_candidates(self, request_body: Dict[str, Any], seed_config: Dict[str, Any] = None) -> tuple[set[str], dict[str, str]]:
         evidence = request_body.get("evidence_window", {}) or {}
         flows = evidence.get("flows", []) or []
         arps = evidence.get("arp", []) or []
@@ -361,12 +552,102 @@ class AnalystService:
         if firewall_ip:
             node_kinds[firewall_ip] = "firewall"
             confirmed.add(firewall_ip)
+        
+        if seed_config:
+            if seed_config.get("defaultGateway"):
+                gw_ip = seed_config["defaultGateway"]
+                node_kinds.setdefault(gw_ip, "gateway")
+                confirmed.add(gw_ip)
+            if seed_config.get("firewallGateway"):
+                fw_ip = seed_config["firewallGateway"]
+                node_kinds.setdefault(fw_ip, "firewall")
+                confirmed.add(fw_ip)
+            if seed_config.get("switchIps"):
+                switch_ips = [ip.strip() for ip in seed_config["switchIps"].split(",") if ip.strip()]
+                for sw_ip in switch_ips:
+                    node_kinds.setdefault(sw_ip, "switch")
+                    confirmed.add(sw_ip)
+        
         for ip in confirmed:
             node_kinds.setdefault(ip, "observed")
         
         print(f"[CONFIRMED] {sorted(confirmed)}", flush=True)
         logger.info(f"Confirmed devices: {confirmed}")
         return confirmed, node_kinds
+
+    def _generate_l3_patch(self, networks: Dict[str, Dict[str, Any]], routers: Dict[str, Dict[str, Any]], 
+                           flows: list, seed_config: Dict[str, Any]) -> Dict[str, Any]:
+        """Generate JSON patch for L3 topology (networks, routers, edges)."""
+        patch_ops = []
+        
+        for net_key, net_info in networks.items():
+            patch_ops.append({
+                "op": "add",
+                "path": f"/networks/{net_key.replace('/', '~1')}",
+                "value": net_info
+            })
+        
+        for router_ip, router_info in routers.items():
+            patch_ops.append({
+                "op": "add",
+                "path": f"/routers/{router_ip}",
+                "value": router_info
+            })
+        
+        ip_to_network = {}
+        for net_key, net_info in networks.items():
+            for member_ip in net_info["members"]:
+                ip_to_network[member_ip] = net_key
+        
+        network_edges = {}
+        for flow in flows:
+            src_ip = flow.get("src_ip")
+            dst_ip = flow.get("dst_ip")
+            
+            if not src_ip or not dst_ip:
+                continue
+            
+            src_net = ip_to_network.get(src_ip)
+            dst_net = "Internet" if dst_ip == "Internet" else ip_to_network.get(dst_ip)
+            
+            if src_net and dst_net and src_net != dst_net:
+                edge_key = f"{src_net}->{dst_net}"
+                
+                if edge_key not in network_edges:
+                    via_router = None
+                    for router_ip in routers.keys():
+                        if router_ip in [src_ip, dst_ip]:
+                            via_router = router_ip
+                            break
+                    
+                    network_edges[edge_key] = {
+                        "src_network": src_net,
+                        "dst_network": dst_net,
+                        "via_router": via_router,
+                        "type": "routes_to",
+                        "confidence": 0.9,
+                        "evidence": []
+                    }
+                
+                evidence_str = f"flow: {src_ip}→{dst_ip}"
+                if evidence_str not in network_edges[edge_key]["evidence"]:
+                    network_edges[edge_key]["evidence"].append(evidence_str)
+        
+        for idx, edge in enumerate(network_edges.values()):
+            patch_ops.append({
+                "op": "add",
+                "path": f"/edges/{idx}",
+                "value": edge
+            })
+        
+        rationale = f"Discovered {len(networks)} networks, {len(routers)} routers, {len(network_edges)} inter-network routes"
+        
+        return {
+            "version": "1.0",
+            "patch": patch_ops,
+            "rationale": rationale,
+            "warnings": []
+        }
 
     async def _sanitize_patch(self, patch_data: Dict[str, Any], confirmed_ips: set[str], node_kinds: dict[str, str]) -> Dict[str, Any]:
         if not isinstance(patch_data, dict):
@@ -429,6 +710,17 @@ class AnalystService:
                     break
         sanitized = dict(patch_data)
         sanitized["patch"] = sanitized_ops
+        
+        original_patch_count = len(patch_data.get("patch", []))
+        sanitized_patch_count = len(sanitized_ops)
+        
+        if original_patch_count > 0 and sanitized_patch_count == 0:
+            sanitized["rationale"] = "No new changes (all proposed operations were for existing nodes/edges)"
+            logger.info("All patch operations were duplicates, updated rationale")
+        elif sanitized_patch_count < original_patch_count:
+            dropped = original_patch_count - sanitized_patch_count
+            logger.info("Dropped %d duplicate operations out of %d", dropped, original_patch_count)
+        
         return sanitized
 
     @staticmethod
@@ -482,3 +774,135 @@ class AnalystService:
     def _load_text(path: str) -> str:
         with open(path, "r", encoding="utf-8") as handle:
             return handle.read()
+    
+    async def classify_device(self, device: Dict[str, Any]) -> Dict[str, Any]:
+        open_ports = device.get("open_ports") or {}
+        snmp_data = device.get("snmp_data") or {}
+        vendor = device.get("vendor")
+        model = device.get("model")
+        
+        device_type = None
+        confidence = 0.0
+        evidence = []
+        
+        if vendor:
+            evidence.append(f"Vendor: {vendor}")
+        if model:
+            evidence.append(f"Model: {model}")
+        
+        has_ssh = "22" in open_ports
+        has_telnet = "23" in open_ports
+        has_http = "80" in open_ports
+        has_https = "443" in open_ports
+        has_rtsp = "554" in open_ports
+        has_mqtt = "1883" in open_ports
+        has_sip = "5060" in open_ports
+        has_http_alt = "8080" in open_ports
+        has_https_alt = "8443" in open_ports
+        has_snmp = "161" in open_ports
+        has_bgp = "179" in open_ports
+        has_rdp = "3389" in open_ports
+        
+        if has_rtsp:
+            device_type = "ip_camera"
+            confidence = 0.85
+            evidence.append("RTSP streaming port open (554)")
+            if has_http_alt or has_http:
+                confidence = 0.9
+                evidence.append("RTSP with web interface")
+        elif has_sip:
+            device_type = "voip_phone"
+            confidence = 0.85
+            evidence.append("SIP protocol port open (5060)")
+            if has_https_alt or has_https:
+                confidence = 0.9
+                evidence.append("SIP with management interface")
+        elif has_mqtt and (has_http or has_https):
+            device_type = "iot_device"
+            confidence = 0.75
+            evidence.append("MQTT protocol with web interface")
+        elif has_rdp and not has_ssh:
+            device_type = "windows_host"
+            confidence = 0.8
+            evidence.append("RDP port open (3389)")
+        elif has_ssh and not has_rdp:
+            ssh_banner = open_ports.get("22", {}).get("banner", "")
+            if "OpenSSH" in ssh_banner:
+                device_type = "linux_host"
+                confidence = 0.7
+                evidence.append(f"SSH with OpenSSH banner: {ssh_banner}")
+            else:
+                device_type = "linux_host"
+                confidence = 0.6
+                evidence.append("SSH port open (22)")
+        
+        if device_type is None and has_snmp and (has_http or has_https or has_https_alt):
+            if has_bgp:
+                device_type = "router"
+                confidence = 0.9
+                evidence.append("BGP port open (179) with SNMP and web")
+            elif vendor in ["Cisco", "Juniper", "Arista"]:
+                device_type = "router"
+                confidence = 0.85
+                evidence.append(f"Network vendor {vendor} with SNMP and web")
+            elif vendor in ["Ubiquiti", "UniFi", "Ruckus", "Aruba"] or (has_https_alt and has_snmp):
+                device_type = "access_point"
+                confidence = 0.8
+                evidence.append("Wireless vendor or HTTPS-alt (8443) with SNMP")
+            else:
+                device_type = "network_device"
+                confidence = 0.7
+                evidence.append("SNMP and web management interfaces")
+        
+        if device_type is None:
+            if has_http or has_https:
+                device_type = "web_server"
+                confidence = 0.5
+                evidence.append("HTTP/HTTPS ports open")
+            else:
+                device_type = "unknown"
+                confidence = 0.1
+                evidence.append("No identifying ports found")
+        
+        return {
+            "device_type": device_type,
+            "confidence_score": confidence,
+            "classification_notes": "; ".join(evidence)
+        }
+    
+    async def classify_inventory_devices(self) -> int:
+        if self._client is None:
+            raise RuntimeError("HTTP client is not initialized")
+        
+        try:
+            resp = await self._client.get(f"{STATE_SERVER_URL}/api/inventory", timeout=10.0)
+            resp.raise_for_status()
+            devices = resp.json()
+        except Exception as e:
+            logger.error(f"Error fetching inventory: {e}")
+            return 0
+        
+        classified_count = 0
+        for device in devices:
+            if device.get("device_type_confirmed"):
+                continue
+            
+            ip_address = device.get("ip_address")
+            current_type = device.get("device_type")
+            
+            classification = await self.classify_device(device)
+            
+            if classification["device_type"] != current_type:
+                try:
+                    update_resp = await self._client.put(
+                        f"{STATE_SERVER_URL}/api/inventory/{ip_address}",
+                        json=classification,
+                        timeout=10.0
+                    )
+                    if update_resp.status_code < 300:
+                        classified_count += 1
+                        logger.info(f"Classified {ip_address} as {classification['device_type']} (confidence: {classification['confidence_score']})")
+                except Exception as e:
+                    logger.error(f"Error updating device {ip_address}: {e}")
+        
+        return classified_count

@@ -10,6 +10,22 @@
       "type": "string",
       "default": "1.0"
     },
+    "tool_calls": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["tool", "arguments"],
+        "properties": {
+          "tool": {
+            "type": "string",
+            "enum": ["infer_device_positions"]
+          },
+          "arguments": {
+            "type": "object"
+          }
+        }
+      }
+    },
     "patch": {
       "type": "array",
       "minItems": 1,
@@ -84,7 +100,7 @@
         "ip": { "$ref": "#/$defs/IP" },
         "kind": {
           "type": "string",
-          "enum": ["host", "gateway", "firewall", "router", "server", "switch", "unknown"],
+          "enum": ["host", "gateway", "firewall", "router", "server", "switch", "internet", "unknown"],
           "default": "unknown"
         },
         "role": { "type": "string" },
@@ -92,7 +108,40 @@
           "type": "array",
           "items": { "type": "string" }
         },
-        "last_seen": { "type": "string", "format": "date-time" }
+        "last_seen": { "type": "string", "format": "date-time" },
+        "position": {
+          "type": "object",
+          "properties": {
+            "layer": {
+              "type": "string",
+              "enum": ["core", "distribution", "access", "edge", "unknown"]
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0
+            },
+            "reasoning": { "type": "string" }
+          }
+        },
+        "switch_probability": {
+          "type": "object",
+          "properties": {
+            "score": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0
+            },
+            "classification": {
+              "type": "string",
+              "enum": ["almost_certainly_switch", "likely_switch", "possible_switch", "unlikely_switch", "not_switch"]
+            },
+            "evidence": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        }
       }
     },
     "Edge": {

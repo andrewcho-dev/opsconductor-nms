@@ -1,5 +1,6 @@
-from sqlalchemy import Column, DateTime, Integer, String, func
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy.dialects.postgresql import ARRAY, INET, JSONB, MACADDR
+from sqlalchemy.orm import relationship
 
 from .database import Base
 
@@ -9,6 +10,7 @@ class GraphState(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=False, default=1)
     graph = Column(JSONB, nullable=False, default=dict)
+    seed_config = Column(JSONB, nullable=True, default=dict)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
@@ -20,3 +22,73 @@ class PatchEvent(Base):
     rationale = Column(String, nullable=False)
     warnings = Column(JSONB)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class Mib(Base):
+    __tablename__ = "mibs"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(255), unique=True, nullable=False)
+    vendor = Column(String(100))
+    device_types = Column(ARRAY(String))
+    version = Column(String(50))
+    file_path = Column(Text, nullable=False)
+    oid_prefix = Column(Text)
+    description = Column(Text)
+    uploaded_at = Column(DateTime(timezone=True), server_default=func.now())
+
+
+class IpInventory(Base):
+    __tablename__ = "ip_inventory"
+
+    id = Column(Integer, primary_key=True)
+    ip_address = Column(INET, unique=True, nullable=False, index=True)
+    mac_address = Column(MACADDR)
+    status = Column(String(20), default='unknown')
+    device_type = Column(String(50))
+    device_type_confirmed = Column(Boolean, default=False)
+    device_name = Column(String(255))
+    vendor = Column(String(100))
+    model = Column(String(100))
+    
+    hostname = Column(String(255))
+    open_ports = Column(JSONB)
+    snmp_data = Column(JSONB)
+    
+    snmp_enabled = Column(Boolean, default=False)
+    snmp_port = Column(Integer, default=161)
+    snmp_version = Column(String(10))
+    snmp_community = Column(String(100))
+    snmp_username = Column(String(100))
+    snmp_auth_protocol = Column(String(20))
+    snmp_auth_key = Column(String(255))
+    snmp_priv_protocol = Column(String(20))
+    snmp_priv_key = Column(String(255))
+    mib_id = Column(Integer, ForeignKey('mibs.id'))
+    
+    first_seen = Column(DateTime(timezone=True), server_default=func.now())
+    last_seen = Column(DateTime(timezone=True), server_default=func.now())
+    last_probed = Column(DateTime(timezone=True))
+    
+    confidence_score = Column(Float)
+    classification_notes = Column(Text)
+    
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    
+    mib = relationship("Mib", backref="devices")
+    confirmations = relationship("DeviceConfirmation", back_populates="device")
+
+
+class DeviceConfirmation(Base):
+    __tablename__ = "device_confirmations"
+
+    id = Column(Integer, primary_key=True)
+    ip_inventory_id = Column(Integer, ForeignKey('ip_inventory.id'), nullable=False)
+    confirmed_by = Column(String(100))
+    confirmed_type = Column(String(50))
+    confidence = Column(Float)
+    evidence = Column(Text)
+    confirmed_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    device = relationship("IpInventory", back_populates="confirmations")
