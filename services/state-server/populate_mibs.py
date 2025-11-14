@@ -164,6 +164,118 @@ COMMON_MIBS = [
         "version": "RFC 4188",
         "file_path": "/usr/share/snmp/mibs/ietf/BRIDGE-MIB",
         "description": "Bridge/switch forwarding database and spanning tree"
+    },
+    {
+        "name": "CIENA-CES-MIB",
+        "vendor": "Ciena",
+        "device_types": ["router", "switch", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/ciena/CIENA-CES-MIB",
+        "oid_prefix": "1.3.6.1.4.1.6141",
+        "description": "Ciena Carrier Ethernet Services MIB"
+    },
+    {
+        "name": "CIENA-GLOBAL-MIB",
+        "vendor": "Ciena",
+        "device_types": ["router", "switch", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/ciena/CIENA-GLOBAL-MIB",
+        "oid_prefix": "1.3.6.1.4.1.6141",
+        "description": "Ciena global device identification and status"
+    },
+    {
+        "name": "DLINK-EQUIPMENT-MIB",
+        "vendor": "D-Link",
+        "device_types": ["switch", "router", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/dlink/DLINK-EQUIPMENT-MIB",
+        "oid_prefix": "1.3.6.1.4.1.171",
+        "description": "D-Link switch and router equipment monitoring"
+    },
+    {
+        "name": "DLINK-DGS-SWITCH-MIB",
+        "vendor": "D-Link",
+        "device_types": ["switch", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/dlink/DLINK-DGS-SWITCH-MIB",
+        "oid_prefix": "1.3.6.1.4.1.171",
+        "description": "D-Link DGS series switch configuration"
+    },
+    {
+        "name": "CANON-PRINTER-MIB",
+        "vendor": "Canon",
+        "device_types": ["printer"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/canon/CANON-PRINTER-MIB",
+        "description": "Canon printer status and supplies monitoring"
+    },
+    {
+        "name": "YEALINK-MIB",
+        "vendor": "Yealink",
+        "device_types": ["voip_phone", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/yealink/YEALINK-MIB",
+        "description": "Yealink VoIP phone status and configuration"
+    },
+    {
+        "name": "HP-LASERJET-COMMON-MIB",
+        "vendor": "HP",
+        "device_types": ["printer"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/hp/HP-LASERJET-COMMON-MIB",
+        "description": "HP LaserJet printer status and supplies"
+    },
+    {
+        "name": "CRADLEPOINT-MIB",
+        "vendor": "Cradlepoint",
+        "device_types": ["router", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/cradlepoint/CRADLEPOINT-MIB",
+        "description": "Cradlepoint router status and configuration"
+    },
+    {
+        "name": "CISCO-FIREWALL-MIB",
+        "vendor": "Cisco",
+        "device_types": ["firewall", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/cisco/CISCO-FIREWALL-MIB",
+        "oid_prefix": "1.3.6.1.4.1.9",
+        "description": "Cisco ASA firewall connections and statistics"
+    },
+    {
+        "name": "CISCO-REMOTE-ACCESS-MONITOR-MIB",
+        "vendor": "Cisco",
+        "device_types": ["firewall", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/cisco/CISCO-REMOTE-ACCESS-MONITOR-MIB",
+        "oid_prefix": "1.3.6.1.4.1.9",
+        "description": "Cisco ASA VPN and remote access monitoring"
+    },
+    {
+        "name": "RAZBERI-MONITOR-MIB",
+        "vendor": "Razberi",
+        "device_types": ["nvr", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/razberi/RAZBERI-MONITOR-MIB",
+        "description": "Razberi NVR health and surveillance monitoring"
+    },
+    {
+        "name": "TPLINK-ROUTER-MIB",
+        "vendor": "TP-Link",
+        "device_types": ["router", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/tplink/TPLINK-ROUTER-MIB",
+        "oid_prefix": "1.3.6.1.4.1.11863.2",
+        "description": "TP-Link Omada router/gateway configuration and status"
+    },
+    {
+        "name": "TPLINK-WIRELESS-MIB",
+        "vendor": "TP-Link",
+        "device_types": ["access_point", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/tplink/TPLINK-WIRELESS-MIB",
+        "oid_prefix": "1.3.6.1.4.1.11863.3",
+        "description": "TP-Link Omada wireless access point configuration and statistics"
     }
 ]
 

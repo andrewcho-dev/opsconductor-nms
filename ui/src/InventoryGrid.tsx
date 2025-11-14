@@ -30,6 +30,7 @@ interface InventoryDevice {
 
 interface InventoryGridProps {
   apiBase: string;
+  onNavigateToAdmin: () => void;
 }
 
 interface SnmpConfig {
@@ -54,7 +55,7 @@ interface Mib {
   description: string | null;
 }
 
-function InventoryGrid({ apiBase }: InventoryGridProps) {
+function InventoryGrid({ apiBase, onNavigateToAdmin }: InventoryGridProps) {
   const [devices, setDevices] = useState<InventoryDevice[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -169,6 +170,60 @@ function InventoryGrid({ apiBase }: InventoryGridProps) {
     }
   };
 
+  const handleReassignMib = async () => {
+    if (!snmpModalDevice) return;
+
+    setSaving(true);
+    try {
+      const response = await fetch(`${apiBase}/api/inventory/${snmpModalDevice.ip_address}/mibs/reassign`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.detail || "Failed to reassign MIB");
+      }
+
+      const updatedDevice = await response.json();
+      alert(`MIB reassigned successfully to: ${allMibs.find(m => m.id === updatedDevice.mib_id)?.name || updatedDevice.mib_id}`);
+      
+      await loadInventory();
+      setSnmpModalDevice(null);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to reassign MIB");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleWalkMib = async () => {
+    if (!snmpModalDevice) return;
+
+    setSaving(true);
+    try {
+      const response = await fetch(`${apiBase}/api/inventory/${snmpModalDevice.ip_address}/mibs/walk`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.detail || "Failed to walk MIB");
+      }
+
+      const result = await response.json();
+      alert(`MIB walk completed successfully!\nMIB: ${result.mib}\nWalked at: ${new Date(result.walked_at).toLocaleString()}`);
+      
+      await loadInventory();
+      setSnmpModalDevice(null);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to walk MIB");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const sortedDevices = [...devices].sort((a, b) => {
     const aVal = a[sortField];
     const bVal = b[sortField];
@@ -205,6 +260,9 @@ function InventoryGrid({ apiBase }: InventoryGridProps) {
           </label>
           <button onClick={loadInventory} className="refresh-btn">
             Refresh
+          </button>
+          <button onClick={onNavigateToAdmin} className="admin-btn">
+            Admin
           </button>
         </div>
       </div>
@@ -283,8 +341,8 @@ function InventoryGrid({ apiBase }: InventoryGridProps) {
                 ×
               </button>
             </div>
-            <div className="modal-body" style={{ display: "flex", gap: "1rem", height: "calc(100vh - 200px)" }}>
-              <div style={{ flex: "0 0 400px", overflowY: "auto", paddingRight: "1rem", borderRight: "1px solid #e5e7eb" }}>
+            <div className="modal-body" style={{ display: "flex", gap: "0.5rem", height: "calc(100vh - 120px)" }}>
+              <div style={{ flex: "0 0 350px", overflowY: "auto", paddingRight: "0.5rem", borderRight: "1px solid #e5e7eb" }}>
                 <h4>SNMP Configuration</h4>
                 <div className="snmp-config-form">
                   <label className="snmp-checkbox-label">
@@ -419,7 +477,7 @@ function InventoryGrid({ apiBase }: InventoryGridProps) {
                   )}
                 </div>
               </div>
-              <div style={{ flex: "1", overflowY: "auto", paddingLeft: "1rem" }}>
+              <div style={{ flex: "1", overflowY: "auto", paddingLeft: "0.5rem" }}>
                 <h4 style={{ marginTop: 0 }}>MIB Data</h4>
                 {snmpModalDevice.snmp_data && (
                   <>
@@ -538,12 +596,19 @@ function InventoryGrid({ apiBase }: InventoryGridProps) {
                               </tr>
                             </thead>
                             <tbody>
-                              {Object.entries(snmpModalDevice.snmp_data.VENDOR_MIB_DATA as Record<string, any>).map(([oid, value]) => (
-                                <tr key={oid}>
-                                  <td style={{ fontFamily: "monospace", fontSize: "0.85em" }}>{oid}</td>
-                                  <td>{String(value)}</td>
-                                </tr>
-                              ))}
+                              {Object.entries(snmpModalDevice.snmp_data.VENDOR_MIB_DATA as Record<string, any>).map(([label, data]) => {
+                                const isNewFormat = typeof data === 'object' && data !== null && 'oid' in data && 'value' in data;
+                                const oidValue = isNewFormat ? data.oid : label;
+                                const displayValue = isNewFormat ? data.value : data;
+                                const displayLabel = label;
+                                
+                                return (
+                                  <tr key={oidValue}>
+                                    <td style={{ fontFamily: "monospace" }} title={oidValue}>{displayLabel}</td>
+                                    <td>{String(displayValue)}</td>
+                                  </tr>
+                                );
+                              })}
                             </tbody>
                           </table>
                         </div>
@@ -551,7 +616,7 @@ function InventoryGrid({ apiBase }: InventoryGridProps) {
                     )}
 
                     {snmpModalDevice.snmp_data.mib_used && (
-                      <div className="snmp-section" style={{ fontSize: "0.85em", color: "#666", marginTop: "1rem" }}>
+                      <div className="snmp-section" style={{ color: "#666", marginTop: "0.5rem" }}>
                         MIB: {snmpModalDevice.snmp_data.mib_used} | Last walked: {snmpModalDevice.snmp_data.walked_at ? new Date(snmpModalDevice.snmp_data.walked_at as string).toLocaleString() : "Never"}
                       </div>
                     )}
@@ -560,12 +625,32 @@ function InventoryGrid({ apiBase }: InventoryGridProps) {
               </div>
             </div>
             <div className="modal-footer">
-              <button className="modal-btn modal-btn-secondary" onClick={() => setSnmpModalDevice(null)}>
-                Cancel
-              </button>
-              <button className="modal-btn" onClick={saveSnmpConfig} disabled={saving}>
-                {saving ? "Saving..." : "Save Configuration"}
-              </button>
+              <div style={{ display: "flex", gap: "0.5rem", flex: 1 }}>
+                <button 
+                  className="modal-btn modal-btn-secondary" 
+                  onClick={handleReassignMib} 
+                  disabled={saving || !snmpModalDevice.snmp_data}
+                  title="Re-suggest and assign the best MIB for this device"
+                >
+                  Reassign MIB
+                </button>
+                <button 
+                  className="modal-btn modal-btn-secondary" 
+                  onClick={handleWalkMib} 
+                  disabled={saving || !snmpModalDevice.mib_id || !snmpModalDevice.snmp_enabled}
+                  title="Trigger an immediate SNMP walk for this device"
+                >
+                  Walk MIB Now
+                </button>
+              </div>
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <button className="modal-btn modal-btn-secondary" onClick={() => setSnmpModalDevice(null)}>
+                  Cancel
+                </button>
+                <button className="modal-btn" onClick={saveSnmpConfig} disabled={saving}>
+                  {saving ? "Saving..." : "Save Configuration"}
+                </button>
+              </div>
             </div>
           </div>
         </div>

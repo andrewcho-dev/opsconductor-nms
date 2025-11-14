@@ -123,6 +123,18 @@ async def update_device_vendor(client: httpx.AsyncClient, ip: str, vendor: str):
 async def health_server():
     from aiohttp import web
     
+    @web.middleware
+    async def cors_middleware(request, handler):
+        if request.method == "OPTIONS":
+            response = web.Response()
+        else:
+            response = await handler(request)
+        
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = '*'
+        return response
+    
     async def handle_health(_):
         stat = OUI_FILE.stat() if OUI_FILE.exists() else None
         age_days = (datetime.now().timestamp() - stat.st_mtime) / 86400 if stat else None
@@ -149,9 +161,11 @@ async def health_server():
         else:
             return web.json_response({"status": "failed", "entries": len(oui_map)}, status=500)
     
-    app = web.Application()
+    app = web.Application(middlewares=[cors_middleware])
+    
     app.router.add_get("/health", handle_health)
     app.router.add_post("/update", handle_update)
+    
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", HEALTH_PORT)

@@ -342,6 +342,22 @@ body {
   background-color: #1d4ed8;
 }
 
+.admin-btn {
+  padding: 0.375rem 0.75rem;
+  background-color: #059669;
+  color: #ffffff;
+  border: none;
+  border-radius: 4px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.admin-btn:hover {
+  background-color: #047857;
+}
+
 .inventory-grid-wrapper {
   flex: 1;
   overflow: auto;
@@ -620,7 +636,7 @@ body {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 1.25rem 1.5rem;
+  padding: 0.5rem 0.75rem;
   border-bottom: 1px solid #e2e8f0;
   background-color: #f8fafc;
 }
@@ -628,18 +644,19 @@ body {
 .modal-header h3 {
   margin: 0;
   color: #0f172a;
-  font-size: 1.25rem;
+  font-size: 0.85rem;
+  font-weight: 600;
 }
 
 .modal-close {
   background: none;
   border: none;
-  font-size: 2rem;
+  font-size: 1.5rem;
   color: #64748b;
   cursor: pointer;
   padding: 0;
-  width: 32px;
-  height: 32px;
+  width: 24px;
+  height: 24px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -654,9 +671,10 @@ body {
 }
 
 .modal-body {
-  padding: 1.5rem;
+  padding: 0.5rem;
   overflow-y: auto;
   flex: 1;
+  font-size: 0.75rem;
 }
 
 .modal-body::-webkit-scrollbar {
@@ -680,63 +698,62 @@ body {
 .snmp-details {
   display: flex;
   flex-direction: column;
-  gap: 0.75rem;
+  gap: 0.25rem;
 }
 
 .snmp-detail-row {
   display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  padding: 0.75rem;
+  gap: 0.5rem;
+  padding: 0.25rem 0.35rem;
   background-color: #f8fafc;
-  border-radius: 4px;
-  border-left: 3px solid #3b82f6;
+  border-bottom: 1px solid #e2e8f0;
 }
 
 .snmp-key {
-  font-size: 0.875rem;
+  font-size: 0.75rem;
   color: #475569;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
   font-weight: 600;
+  min-width: 120px;
 }
 
 .snmp-value {
   font-family: "Courier New", "Consolas", "Monaco", monospace;
-  font-size: 0.9rem;
+  font-size: 0.75rem;
   color: #0f172a;
   word-break: break-word;
-  white-space: pre-wrap;
+  flex: 1;
 }
 
 .snmp-section {
-  margin-bottom: 1.5rem;
+  margin-bottom: 0.75rem;
 }
 
 .snmp-section:last-child {
   margin-bottom: 0;
 }
 
-.snmp-section h4 {
-  margin: 0 0 1rem 0;
+.snmp-section h4,
+.snmp-section h5 {
+  margin: 0 0 0.25rem 0;
   color: #0f172a;
-  font-size: 1rem;
+  font-size: 0.75rem;
   font-weight: 600;
-  padding-bottom: 0.5rem;
-  border-bottom: 2px solid #e2e8f0;
+  padding: 0.25rem 0.35rem;
+  background-color: #f1f5f9;
+  border-bottom: 2px solid #cbd5e1;
 }
 
 .snmp-config-form {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: 0.5rem;
 }
 
 .snmp-config-form label {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  font-size: 0.875rem;
+  gap: 0.25rem;
+  font-size: 0.75rem;
   color: #1e293b;
 }
 
@@ -746,10 +763,10 @@ body {
 
 .snmp-config-form input,
 .snmp-config-form select {
-  padding: 0.5rem;
+  padding: 0.35rem;
   border: 1px solid #cbd5e1;
   border-radius: 4px;
-  font-size: 0.875rem;
+  font-size: 0.75rem;
   background-color: #ffffff;
   color: #0f172a;
   font-family: inherit;
@@ -774,21 +791,21 @@ body {
 }
 
 .modal-footer {
-  padding: 1rem 1.5rem;
+  padding: 0.5rem 0.75rem;
   border-top: 1px solid #e2e8f0;
   display: flex;
   justify-content: flex-end;
-  gap: 0.75rem;
+  gap: 0.5rem;
   background-color: #f8fafc;
 }
 
 .modal-btn {
-  padding: 0.5rem 1.25rem;
+  padding: 0.35rem 0.75rem;
   background-color: #2563eb;
   color: #ffffff;
   border: none;
   border-radius: 4px;
-  font-size: 0.875rem;
+  font-size: 0.75rem;
   font-weight: 600;
   cursor: pointer;
   transition: background-color 0.2s;
@@ -820,6 +837,308 @@ body {
   background-color: #94a3b8;
 }
 
+.snmp-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+  table-layout: auto;
+}
+
+.snmp-table thead {
+  background-color: #f1f5f9;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.snmp-table th {
+  padding: 0.25rem 0.35rem;
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.75rem;
+  color: #0f172a;
+  border-bottom: 2px solid #cbd5e1;
+  white-space: nowrap;
+}
+
+.snmp-table tbody tr {
+  border-bottom: 1px solid #e2e8f0;
+  transition: background-color 0.15s;
+}
+
+.snmp-table tbody tr:hover {
+  background-color: #f8fafc;
+}
+
+.snmp-table td {
+  padding: 0.25rem 0.35rem;
+  color: #1e293b;
+  font-size: 0.75rem;
+}
+
+.admin-container {
+  padding: 0.75rem;
+  max-width: 100%;
+  overflow-y: auto;
+}
+
+.admin-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 2px solid #cbd5e1;
+}
+
+.admin-header h1 {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #0f172a;
+  margin: 0;
+}
+
+.back-button {
+  padding: 0.35rem 0.75rem;
+  background-color: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  color: #334155;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.back-button:hover {
+  background-color: #e2e8f0;
+}
+
+.admin-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.admin-section {
+  background-color: #ffffff;
+  border: 1px solid #e2e8f0;
+  border-radius: 3px;
+  padding: 0.75rem;
+}
+
+.admin-section h2 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #0f172a;
+  margin: 0 0 0.5rem 0;
+  padding-bottom: 0.25rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.admin-section h3 {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #334155;
+  margin: 0.5rem 0 0.35rem 0;
+}
+
+.status-panel {
+  background-color: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 3px;
+  padding: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.status-row {
+  display: flex;
+  padding: 0.25rem 0.35rem;
+  font-size: 0.75rem;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.status-row:last-child {
+  border-bottom: none;
+}
+
+.status-label {
+  font-weight: 600;
+  color: #475569;
+  width: 100px;
+}
+
+.status-value {
+  color: #1e293b;
+  flex: 1;
+}
+
+.status-value.mono {
+  font-family: "Courier New", "Consolas", "Monaco", monospace;
+  font-size: 0.7rem;
+}
+
+.warning-text {
+  color: #ea580c;
+  font-weight: 600;
+}
+
+.action-panel {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.action-button {
+  padding: 0.35rem 0.75rem;
+  background-color: #2563eb;
+  border: none;
+  border-radius: 3px;
+  font-size: 0.75rem;
+  color: #ffffff;
+  cursor: pointer;
+  transition: background-color 0.15s;
+  font-weight: 500;
+}
+
+.action-button:hover:not(:disabled) {
+  background-color: #1d4ed8;
+}
+
+.action-button:disabled {
+  background-color: #94a3b8;
+  cursor: not-allowed;
+}
+
+.message {
+  font-size: 0.75rem;
+  color: #0f172a;
+  padding: 0.25rem 0.5rem;
+  background-color: #f1f5f9;
+  border-radius: 3px;
+}
+
+.mib-form {
+  margin-bottom: 1rem;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.form-field.full-width {
+  grid-column: 1 / -1;
+}
+
+.form-field label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #475569;
+}
+
+.form-field input,
+.form-field textarea {
+  padding: 0.35rem;
+  font-size: 0.75rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 3px;
+  font-family: inherit;
+  color: #1e293b;
+}
+
+.form-field input:focus,
+.form-field textarea:focus {
+  outline: none;
+  border-color: #2563eb;
+}
+
+.form-field textarea {
+  resize: vertical;
+  font-family: inherit;
+}
+
+.mib-list {
+  margin-top: 0.75rem;
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.admin-table thead {
+  background-color: #f1f5f9;
+}
+
+.admin-table th {
+  padding: 0.25rem 0.35rem;
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.75rem;
+  color: #0f172a;
+  border-bottom: 2px solid #cbd5e1;
+  white-space: nowrap;
+}
+
+.admin-table tbody tr {
+  border-bottom: 1px solid #e2e8f0;
+  transition: background-color 0.15s;
+}
+
+.admin-table tbody tr:hover {
+  background-color: #f8fafc;
+}
+
+.admin-table td {
+  padding: 0.25rem 0.35rem;
+  color: #1e293b;
+  font-size: 0.75rem;
+}
+
+.admin-table td.mono {
+  font-family: "Courier New", "Consolas", "Monaco", monospace;
+}
+
+.admin-table td.description-cell {
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.delete-button {
+  padding: 0.2rem 0.4rem;
+  background-color: #fee2e2;
+  border: 1px solid #fecaca;
+  border-radius: 3px;
+  font-size: 0.7rem;
+  color: #dc2626;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.delete-button:hover {
+  background-color: #fecaca;
+}
+
+.loading {
+  padding: 0.5rem;
+  text-align: center;
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
 @media (max-width: 900px) {
   .content {
     grid-template-columns: 1fr;
@@ -828,5 +1147,9 @@ body {
   
   .modal-content {
     max-width: 95%;
+  }
+
+  .form-grid {
+    grid-template-columns: 1fr;
   }
 }

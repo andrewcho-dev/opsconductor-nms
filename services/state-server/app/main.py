@@ -176,6 +176,45 @@ async def list_mibs(session: AsyncSession = Depends(get_session)) -> list[MibRes
     return await inventory_service.list_mibs(session)
 
 
+@app.get("/api/mibs/{mib_id}")
+async def get_mib(
+    mib_id: int,
+    session: AsyncSession = Depends(get_session)
+) -> dict:
+    try:
+        import os
+        from sqlalchemy import select
+        from .models import Mib
+        
+        result = await session.execute(select(Mib).where(Mib.id == mib_id))
+        mib = result.scalar_one_or_none()
+        
+        if not mib:
+            raise HTTPException(status_code=404, detail=f"MIB with ID {mib_id} not found")
+        
+        content = None
+        if mib.file_path and os.path.exists(mib.file_path):
+            with open(mib.file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+        
+        return {
+            "id": mib.id,
+            "name": mib.name,
+            "vendor": mib.vendor,
+            "device_types": mib.device_types,
+            "version": mib.version,
+            "description": mib.description,
+            "oid_prefix": mib.oid_prefix,
+            "file_path": mib.file_path,
+            "uploaded_at": mib.uploaded_at,
+            "content": content
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @app.post("/api/mibs", response_model=MibResponse)
 async def create_mib(
     data: MibCreate,
@@ -207,3 +246,27 @@ async def suggest_mibs_for_device(
     session: AsyncSession = Depends(get_session)
 ) -> list[MibResponse]:
     return await inventory_service.suggest_mibs(session, ip_address)
+
+
+@app.post("/api/inventory/{ip_address}/mibs/reassign", response_model=IpInventoryResponse)
+async def reassign_device_mib(
+    ip_address: str,
+    session: AsyncSession = Depends(get_session)
+) -> IpInventoryResponse:
+    try:
+        return await inventory_service.reassign_mib(session, ip_address)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/inventory/{ip_address}/mibs/walk")
+async def trigger_device_mib_walk(
+    ip_address: str,
+    session: AsyncSession = Depends(get_session)
+) -> dict:
+    try:
+        return await inventory_service.trigger_mib_walk(session, ip_address)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

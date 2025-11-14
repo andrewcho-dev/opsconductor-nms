@@ -1,8 +1,9 @@
 import asyncio
 import os
 import time
+import tempfile
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple
 
 import httpx
 from pysnmp.hlapi.asyncio import (
@@ -15,6 +16,7 @@ from pysnmp.hlapi.asyncio import (
     walk_cmd,
     get_cmd,
 )
+from pysnmp.smi import builder, view, compiler
 
 
 STATE_SERVER_URL = os.getenv("STATE_SERVER_URL", "http://state-server:8080")
@@ -44,7 +46,94 @@ async def fetch_devices_with_mibs(client: httpx.AsyncClient) -> List[Dict]:
         return []
 
 
-async def walk_oid_tree(ip: str, community: str, version: str, base_oid: str, max_results: int = 100) -> List[tuple]:
+async def fetch_mib_content(client: httpx.AsyncClient, mib_id: int) -> Optional[str]:
+    try:
+        resp = await client.get(f"{STATE_SERVER_URL}/api/mibs/{mib_id}", timeout=10.0)
+        if resp.status_code == 200:
+            mib_data = resp.json()
+            return mib_data.get("content")
+        return None
+    except Exception as e:
+        print(f"[MIB-WALKER] Error fetching MIB content for ID {mib_id}: {e}", flush=True)
+        return None
+
+
+def load_mib_for_resolution() -> Optional[view.MibViewController]:
+    try:
+        mib_builder = builder.MibBuilder()
+        compiler.addMibCompiler(
+            mib_builder,
+            sources=['http://mibs.pysnmp.com/asn1/@mib@']
+        )
+        
+        standard_mibs = [
+            'SNMPv2-MIB', 'IF-MIB', 'IP-MIB', 'TCP-MIB', 'UDP-MIB',
+            'HOST-RESOURCES-MIB', 'Printer-MIB', 'BRIDGE-MIB', 'ENTITY-MIB'
+        ]
+        
+        loaded_count = 0
+        for mib in standard_mibs:
+            try:
+                mib_builder.load_modules(mib)
+                loaded_count += 1
+            except Exception:
+                pass
+        
+        print(f"[MIB-WALKER] Loaded {loaded_count}/{len(standard_mibs)} standard MIBs for OID resolution", flush=True)
+        return view.MibViewController(mib_builder)
+    except Exception as e:
+        print(f"[MIB-WALKER] Error loading MIBs: {e}", flush=True)
+        return None
+
+
+def _get_text_label_from_oid(oid_str: str, mib_view: Optional[view.MibViewController]) -> str:
+    if not mib_view:
+        return _create_oid_label_fallback(oid_str)
+    
+    try:
+        oid_tuple = tuple(int(x) for x in oid_str.split('.') if x)
+        
+        _, label, suffix = mib_view.getNodeName(oid_tuple)
+        
+        if label and len(label) > 0:
+            text_name = label[-1]
+            
+            if suffix and len(suffix) > 0:
+                suffix_str = '.'.join(str(x) for x in suffix)
+                return f"{text_name}.{suffix_str}"
+            else:
+                return text_name
+        
+        return _create_oid_label_fallback(oid_str)
+        
+    except Exception:
+        return _create_oid_label_fallback(oid_str)
+
+
+def _create_oid_label_fallback(oid: str, base_oid: str = None) -> str:
+    try:
+        parts = oid.split('.')
+        
+        if base_oid:
+            base_parts = base_oid.split('.')
+            if len(parts) > len(base_parts):
+                remaining = parts[len(base_parts):]
+                if len(remaining) <= 4:
+                    return '.'.join(remaining)
+                else:
+                    return '.'.join(remaining[-4:])
+        
+        if len(parts) >= 4:
+            return '.'.join(parts[-4:])
+        elif len(parts) >= 2:
+            return '.'.join(parts[-2:])
+        
+        return oid
+    except Exception:
+        return oid
+
+
+async def walk_oid_tree(ip: str, community: str, version: str, base_oid: str, mib_view: Optional[view.MibViewController] = None, max_results: int = 100) -> List[Tuple[str, str, str]]:
     try:
         snmpEngine = SnmpEngine()
         results = []
@@ -69,7 +158,8 @@ async def walk_oid_tree(ip: str, community: str, version: str, base_oid: str, ma
                     snmpEngine.close_dispatcher()
                     return results
                 
-                results.append((oid, value))
+                label = _get_text_label_from_oid(oid, mib_view)
+                results.append((oid, value, label))
                 
                 if len(results) >= max_results:
                     snmpEngine.close_dispatcher()
@@ -119,11 +209,11 @@ async def walk_interfaces(ip: str, community: str, version: str) -> Dict[str, An
     if_admin_status = await walk_oid_tree(ip, community, version, "1.3.6.1.2.1.2.2.1.7", max_results=50)
     if_oper_status = await walk_oid_tree(ip, community, version, "1.3.6.1.2.1.2.2.1.8", max_results=50)
     
-    descr_map = {oid.split('.')[-1]: val for oid, val in if_descr}
-    type_map = {oid.split('.')[-1]: val for oid, val in if_type}
-    speed_map = {oid.split('.')[-1]: val for oid, val in if_speed}
-    admin_map = {oid.split('.')[-1]: val for oid, val in if_admin_status}
-    oper_map = {oid.split('.')[-1]: val for oid, val in if_oper_status}
+    descr_map = {oid.split('.')[-1]: val for oid, val, _ in if_descr}
+    type_map = {oid.split('.')[-1]: val for oid, val, _ in if_type}
+    speed_map = {oid.split('.')[-1]: val for oid, val, _ in if_speed}
+    admin_map = {oid.split('.')[-1]: val for oid, val, _ in if_admin_status}
+    oper_map = {oid.split('.')[-1]: val for oid, val, _ in if_oper_status}
     
     for idx in descr_map.keys():
         interface_data[idx] = {
@@ -163,10 +253,10 @@ async def walk_storage(ip: str, community: str, version: str) -> Dict[str, Any]:
     hr_storage_size = await walk_oid_tree(ip, community, version, "1.3.6.1.2.1.25.2.3.1.5", max_results=30)
     hr_storage_used = await walk_oid_tree(ip, community, version, "1.3.6.1.2.1.25.2.3.1.6", max_results=30)
     
-    descr_map = {oid.split('.')[-1]: val for oid, val in hr_storage_descr}
-    units_map = {oid.split('.')[-1]: val for oid, val in hr_storage_units}
-    size_map = {oid.split('.')[-1]: val for oid, val in hr_storage_size}
-    used_map = {oid.split('.')[-1]: val for oid, val in hr_storage_used}
+    descr_map = {oid.split('.')[-1]: val for oid, val, _ in hr_storage_descr}
+    units_map = {oid.split('.')[-1]: val for oid, val, _ in hr_storage_units}
+    size_map = {oid.split('.')[-1]: val for oid, val, _ in hr_storage_size}
+    used_map = {oid.split('.')[-1]: val for oid, val, _ in hr_storage_used}
     
     for idx in descr_map.keys():
         storage_data[idx] = {
@@ -179,7 +269,7 @@ async def walk_storage(ip: str, community: str, version: str) -> Dict[str, Any]:
     return storage_data
 
 
-async def walk_device(ip: str, community: str, version: str, mib_name: str, oid_prefix: Optional[str] = None) -> Dict[str, Any]:
+async def walk_device(client: httpx.AsyncClient, ip: str, community: str, version: str, mib_id: int, mib_name: str, oid_prefix: Optional[str] = None) -> Dict[str, Any]:
     print(f"[MIB-WALKER] Walking device {ip} with MIB {mib_name} (SNMP v{version})", flush=True)
     
     mib_data = {
@@ -203,9 +293,14 @@ async def walk_device(ip: str, community: str, version: str, mib_name: str, oid_
             print(f"[MIB-WALKER] Found {len(storage)} storage entries on {ip}", flush=True)
         
         if oid_prefix:
-            vendor_data = await walk_oid_tree(ip, community, version, oid_prefix, max_results=500)
+            mib_view = load_mib_for_resolution()
+            
+            vendor_data = await walk_oid_tree(ip, community, version, oid_prefix, mib_view, max_results=500)
             if vendor_data:
-                mib_data["VENDOR_MIB_DATA"] = {oid: value for oid, value in vendor_data}
+                mib_data["VENDOR_MIB_DATA"] = {
+                    label if label else oid: {"oid": oid, "value": value}
+                    for oid, value, label in vendor_data
+                }
                 print(f"[MIB-WALKER] Found {len(vendor_data)} vendor-specific OIDs on {ip}", flush=True)
         
         return mib_data
@@ -247,6 +342,58 @@ async def update_device_mib_data(client: httpx.AsyncClient, ip: str, mib_data: D
         print(f"[MIB-WALKER] Error updating {ip}: {e}", flush=True)
 
 
+async def handle_walk_trigger(request):
+    from aiohttp import web
+    import httpx
+    
+    try:
+        data = await request.json()
+        ip_address = data.get("ip_address")
+        
+        if not ip_address:
+            return web.json_response({"error": "ip_address required"}, status=400)
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(f"{STATE_SERVER_URL}/api/inventory/{ip_address}")
+            if resp.status_code != 200:
+                return web.json_response({"error": f"Device {ip_address} not found"}, status=404)
+            
+            device = resp.json()
+            
+            if not device.get("mib_id"):
+                return web.json_response({"error": f"Device {ip_address} has no MIB assigned"}, status=400)
+            
+            ip = device.get("ip_address")
+            community = device.get("snmp_community", "public")
+            version = device.get("snmp_version", "2c")
+            mib_id = device.get("mib_id")
+            
+            mibs_resp = await client.get(f"{STATE_SERVER_URL}/api/mibs")
+            if mibs_resp.status_code == 200:
+                all_mibs = mibs_resp.json()
+                mib = next((m for m in all_mibs if m["id"] == mib_id), None)
+                mib_name = mib["name"] if mib else "Unknown"
+                oid_prefix = mib.get("oid_prefix") if mib else None
+            else:
+                return web.json_response({"error": "Could not fetch MIBs"}, status=500)
+            
+            mib_data = await walk_device(client, ip, community, version, mib_id, mib_name, oid_prefix)
+            if not mib_data:
+                return web.json_response({"error": "MIB walk failed"}, status=500)
+            
+            await update_device_mib_data(client, ip, mib_data)
+            
+            return web.json_response({
+                "status": "ok",
+                "ip": ip,
+                "mib": mib_name,
+                "walked_at": mib_data.get("walked_at")
+            })
+            
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
+
+
 async def health_server():
     from aiohttp import web
     
@@ -258,6 +405,7 @@ async def health_server():
     
     app = web.Application()
     app.router.add_get("/health", handle_health)
+    app.router.add_post("/walk", handle_walk_trigger)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", HEALTH_PORT)
@@ -310,7 +458,7 @@ async def walker_loop():
                         mib_name = f"MIB-{mib_id}"
                         oid_prefix = None
                     
-                    mib_data = await walk_device(ip, community, version, mib_name, oid_prefix)
+                    mib_data = await walk_device(client, ip, community, version, mib_id, mib_name, oid_prefix)
                     if mib_data:
                         await update_device_mib_data(client, ip, mib_data)
                     

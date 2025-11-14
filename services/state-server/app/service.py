@@ -280,26 +280,29 @@ class InventoryService:
         result = await session.execute(select(Mib).order_by(Mib.vendor, Mib.name))
         all_mibs = result.scalars().all()
         
-        matching_mibs = []
+        scored_mibs = []
         device_type_lower = device_type.lower() if device_type else None
         
         for mib in all_mibs:
-            matches = False
+            score = 0
             
             if mib.vendor == "IETF":
-                matches = True
+                score = 10
             elif vendor_normalized and mib.vendor and vendor_normalized.lower() in mib.vendor.lower():
-                matches = True
+                score = 100
+            else:
+                continue
             
-            if matches and device_type_lower and mib.device_types:
+            if device_type_lower and mib.device_types:
                 device_types_lower = [dt.lower() for dt in mib.device_types]
-                if device_type_lower not in device_types_lower:
-                    matches = False
+                if device_type_lower in device_types_lower:
+                    score += 50
             
-            if matches:
-                matching_mibs.append(MibResponse.model_validate(mib))
+            scored_mibs.append((score, mib))
         
-        return matching_mibs
+        scored_mibs.sort(key=lambda x: x[0], reverse=True)
+        
+        return [MibResponse.model_validate(mib) for _, mib in scored_mibs]
     
     def _normalize_vendor(self, vendor: str | None) -> str | None:
         if not vendor:
@@ -317,6 +320,13 @@ class InventoryService:
             "juniper networks": "Juniper",
             "arista networks": "Arista",
             "cisco systems": "Cisco",
+            "d-link": "D-Link",
+            "dlink": "D-Link",
+            "canon inc": "Canon",
+            "yealink": "Yealink",
+            "cradlepoint": "Cradlepoint",
+            "razberi": "Razberi",
+            "ciena": "Ciena",
         }
         
         for key, normalized in mappings.items():
@@ -324,3 +334,60 @@ class InventoryService:
                 return normalized
         
         return vendor.split()[0].title()
+    
+    async def reassign_mib(self, session: AsyncSession, ip_address: str) -> IpInventoryResponse:
+        result = await session.execute(
+            select(IpInventory).where(IpInventory.ip_address == cast(ip_address, INET))
+        )
+        device = result.scalars().first()
+        
+        if not device:
+            raise ValueError(f"Device {ip_address} not found")
+        
+        if not device.snmp_data:
+            raise ValueError(f"Device {ip_address} has no SNMP data")
+        
+        suggestions = await self.suggest_mibs(session, ip_address)
+        if not suggestions:
+            raise ValueError(f"No MIB suggestions found for {ip_address}")
+        
+        vendor_mibs = [s for s in suggestions if s.vendor.upper() != "IETF"]
+        best_mib = vendor_mibs[0] if vendor_mibs else suggestions[0]
+        
+        device.mib_id = best_mib.id
+        await session.commit()
+        await session.refresh(device)
+        
+        return IpInventoryResponse.model_validate(device)
+    
+    async def trigger_mib_walk(self, session: AsyncSession, ip_address: str) -> dict:
+        import httpx
+        
+        result = await session.execute(
+            select(IpInventory).where(IpInventory.ip_address == cast(ip_address, INET))
+        )
+        device = result.scalars().first()
+        
+        if not device:
+            raise ValueError(f"Device {ip_address} not found")
+        
+        if not device.mib_id:
+            raise ValueError(f"Device {ip_address} has no MIB assigned")
+        
+        if not device.snmp_enabled:
+            raise ValueError(f"Device {ip_address} does not have SNMP enabled")
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            try:
+                resp = await client.post(
+                    "http://mib-walker:9600/walk",
+                    json={"ip_address": ip_address}
+                )
+                if resp.status_code == 200:
+                    return resp.json()
+                else:
+                    raise ValueError(f"MIB walk failed with status {resp.status_code}: {resp.text}")
+            except httpx.ConnectError:
+                raise ValueError("Cannot connect to mib-walker service")
+            except Exception as e:
+                raise ValueError(f"MIB walk request failed: {str(e)}")
