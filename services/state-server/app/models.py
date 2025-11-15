@@ -65,6 +65,7 @@ class IpInventory(Base):
     snmp_priv_protocol = Column(String(20))
     snmp_priv_key = Column(String(255))
     mib_id = Column(Integer, ForeignKey('mibs.id'))
+    mib_ids = Column(ARRAY(Integer), default=list)
     
     first_seen = Column(DateTime(timezone=True), server_default=func.now())
     last_seen = Column(DateTime(timezone=True), server_default=func.now())

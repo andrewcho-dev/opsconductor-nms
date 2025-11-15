@@ -21,6 +21,7 @@ interface InventoryDevice {
   snmp_priv_protocol: string | null;
   snmp_priv_key: string | null;
   mib_id: number | null;
+  mib_ids: number[] | null;
   confidence_score: number | null;
   classification_notes: string | null;
   first_seen: string;
@@ -53,6 +54,78 @@ interface Mib {
   device_types: string[] | null;
   version: string | null;
   description: string | null;
+}
+
+function renderComplexValue(value: any, depth: number = 0): React.ReactNode {
+  if (value === null || value === undefined) {
+    return <span style={{ color: "#9ca3af", fontStyle: "italic" }}>null</span>;
+  }
+
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return <span style={{ color: "#9ca3af", fontStyle: "italic" }}>[]</span>;
+    }
+    return (
+      <div style={{ marginTop: "0.25rem" }}>
+        {value.map((item, idx) => (
+          <div key={idx} style={{ paddingLeft: "1rem", borderLeft: "2px solid #e5e7eb", marginBottom: "0.25rem" }}>
+            {renderComplexValue(item, depth + 1)}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  if (typeof value === 'object') {
+    const entries = Object.entries(value);
+    if (entries.length === 0) {
+      return <span style={{ color: "#9ca3af", fontStyle: "italic" }}>{'{}'}</span>;
+    }
+
+    const isComplexNested = entries.some(([_, v]) => typeof v === 'object' && v !== null && !Array.isArray(v) && Object.keys(v).length > 3);
+    
+    if (isComplexNested && depth < 2) {
+      return (
+        <div style={{ marginTop: "0.5rem" }}>
+          {entries.map(([subKey, subValue]) => (
+            <details key={subKey} style={{ marginBottom: "0.5rem", paddingLeft: "0.5rem", borderLeft: "2px solid #e5e7eb" }}>
+              <summary style={{ cursor: "pointer", fontWeight: "500", color: "#374151", fontSize: "0.85rem", padding: "0.25rem" }}>
+                {subKey}
+              </summary>
+              <div style={{ paddingLeft: "1rem", marginTop: "0.25rem" }}>
+                {renderComplexValue(subValue, depth + 1)}
+              </div>
+            </details>
+          ))}
+        </div>
+      );
+    }
+
+    return (
+      <table className="snmp-table" style={{ fontSize: "0.8rem", marginTop: "0.25rem", width: "100%" }}>
+        <thead>
+          <tr>
+            <th style={{ width: "40%" }}>Key</th>
+            <th>Value</th>
+          </tr>
+        </thead>
+        <tbody>
+          {entries.map(([subKey, subValue]) => (
+            <tr key={subKey}>
+              <td style={{ fontFamily: "monospace", fontSize: "0.75rem", color: "#6b7280" }}>{subKey}</td>
+              <td>{renderComplexValue(subValue, depth + 1)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
+  }
+
+  return String(value);
 }
 
 function InventoryGrid({ apiBase, onNavigateToAdmin }: InventoryGridProps) {
@@ -186,7 +259,11 @@ function InventoryGrid({ apiBase, onNavigateToAdmin }: InventoryGridProps) {
       }
 
       const updatedDevice = await response.json();
-      alert(`MIB reassigned successfully to: ${allMibs.find(m => m.id === updatedDevice.mib_id)?.name || updatedDevice.mib_id}`);
+      const primaryMib = allMibs.find(m => m.id === updatedDevice.mib_id)?.name || updatedDevice.mib_id;
+      const assignedMibs = updatedDevice.mib_ids 
+        ? updatedDevice.mib_ids.map((id: number) => allMibs.find(m => m.id === id)?.name || id).join(", ")
+        : primaryMib;
+      alert(`MIB reassignment completed!\n\nPrimary MIB: ${primaryMib}\nAll Assigned MIBs (${updatedDevice.mib_ids?.length || 1}): ${assignedMibs}`);
       
       await loadInventory();
       setSnmpModalDevice(null);
@@ -213,7 +290,9 @@ function InventoryGrid({ apiBase, onNavigateToAdmin }: InventoryGridProps) {
       }
 
       const result = await response.json();
-      alert(`MIB walk completed successfully!\nMIB: ${result.mib}\nWalked at: ${new Date(result.walked_at).toLocaleString()}`);
+      const mibCount = result.mibs_walked || 1;
+      const mibText = mibCount === 1 ? "1 MIB" : `${mibCount} MIBs`;
+      alert(`MIB walk completed successfully!\n\nMIBs walked: ${mibText}\nWalked at: ${new Date(result.walked_at).toLocaleString()}`);
       
       await loadInventory();
       setSnmpModalDevice(null);
@@ -376,7 +455,7 @@ function InventoryGrid({ apiBase, onNavigateToAdmin }: InventoryGridProps) {
                   </label>
 
                   <label>
-                    <span>MIB Selection</span>
+                    <span>Primary MIB</span>
                     <select
                       value={snmpConfig.mib_id || ""}
                       onChange={(e) => setSnmpConfig({ ...snmpConfig, mib_id: e.target.value ? parseInt(e.target.value) : null })}
@@ -404,6 +483,36 @@ function InventoryGrid({ apiBase, onNavigateToAdmin }: InventoryGridProps) {
                       )}
                     </select>
                   </label>
+
+                  {snmpModalDevice.mib_ids && snmpModalDevice.mib_ids.length > 0 && (
+                    <div style={{ marginTop: "0.5rem", padding: "0.75rem", background: "#f3f4f6", borderRadius: "0.375rem" }}>
+                      <strong style={{ fontSize: "0.875rem", color: "#374151", display: "block", marginBottom: "0.5rem" }}>
+                        Assigned MIBs ({snmpModalDevice.mib_ids.length}):
+                      </strong>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.375rem" }}>
+                        {snmpModalDevice.mib_ids.map((mibId) => {
+                          const mib = allMibs.find(m => m.id === mibId);
+                          const isPrimary = mibId === snmpModalDevice.mib_id;
+                          return mib ? (
+                            <span 
+                              key={mibId} 
+                              style={{ 
+                                fontSize: "0.75rem", 
+                                padding: "0.25rem 0.5rem", 
+                                background: isPrimary ? "#3b82f6" : "#6b7280",
+                                color: "white",
+                                borderRadius: "0.25rem",
+                                fontWeight: isPrimary ? "600" : "400"
+                              }}
+                              title={`${mib.name} (${mib.vendor})${isPrimary ? ' - Primary' : ''}`}
+                            >
+                              {mib.name}
+                            </span>
+                          ) : null;
+                        })}
+                      </div>
+                    </div>
+                  )}
 
                   {(snmpConfig.snmp_version === "1" || snmpConfig.snmp_version === "2c") && (
                     <label>
@@ -485,7 +594,7 @@ function InventoryGrid({ apiBase, onNavigateToAdmin }: InventoryGridProps) {
                       <h5>Basic Information</h5>
                       <div className="snmp-details">
                         {Object.entries(snmpModalDevice.snmp_data)
-                          .filter(([key]) => !["interfaces", "storage", "system", "walked_at", "mib_used", "VENDOR_MIB_DATA"].includes(key))
+                          .filter(([key]) => !["interfaces", "storage", "system", "walked_at", "mib_used", "mib_results", "VENDOR_MIB_DATA"].includes(key))
                           .map(([key, value]) => (
                             <div key={key} className="snmp-detail-row">
                               <strong className="snmp-key">{key}:</strong>
@@ -612,6 +721,41 @@ function InventoryGrid({ apiBase, onNavigateToAdmin }: InventoryGridProps) {
                             </tbody>
                           </table>
                         </div>
+                      </div>
+                    )}
+
+                    {snmpModalDevice.snmp_data.mib_results && (
+                      <div className="snmp-section">
+                        <h5>Per-MIB Results</h5>
+                        {Object.entries(snmpModalDevice.snmp_data.mib_results as Record<string, any>).map(([mibName, mibData]) => (
+                          <div key={mibName} style={{ marginBottom: "1rem", padding: "0.75rem", background: "#f9fafb", borderRadius: "0.375rem", border: "1px solid #e5e7eb" }}>
+                            <strong style={{ fontSize: "0.9rem", color: "#111827", display: "block", marginBottom: "0.5rem" }}>
+                              {mibName}
+                            </strong>
+                            {typeof mibData === 'object' && mibData !== null ? (
+                              <div style={{ overflowX: "auto", maxHeight: "300px", overflowY: "auto" }}>
+                                <table className="snmp-table" style={{ fontSize: "0.875rem" }}>
+                                  <thead>
+                                    <tr>
+                                      <th>Key</th>
+                                      <th>Value</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {Object.entries(mibData).map(([key, value]) => (
+                                      <tr key={key}>
+                                        <td style={{ fontFamily: "monospace", fontSize: "0.8rem" }}>{key}</td>
+                                        <td>{renderComplexValue(value, 1)}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            ) : (
+                              <span style={{ fontSize: "0.875rem", color: "#6b7280" }}>No data available</span>
+                            )}
+                          </div>
+                        ))}
                       </div>
                     )}
 

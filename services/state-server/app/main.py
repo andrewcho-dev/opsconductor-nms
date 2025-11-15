@@ -154,6 +154,14 @@ async def update_inventory_item(
     try:
         return await inventory_service.update_ip(session, ip_address, data)
     except SQLAlchemyError as exc:
+        import traceback
+        error_detail = f"{str(exc)}\n{traceback.format_exc()}"
+        print(f"[STATE-SERVER] SQL Error updating {ip_address}: {error_detail}", flush=True)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        import traceback
+        error_detail = f"{str(exc)}\n{traceback.format_exc()}"
+        print(f"[STATE-SERVER] General Error updating {ip_address}: {error_detail}", flush=True)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
@@ -267,6 +275,14 @@ async def trigger_device_mib_walk(
     session: AsyncSession = Depends(get_session)
 ) -> dict:
     try:
-        return await inventory_service.trigger_mib_walk(session, ip_address)
+        print(f"[STATE-SERVER] Walk MIB request received for {ip_address}", flush=True)
+        result = await inventory_service.trigger_mib_walk(session, ip_address)
+        print(f"[STATE-SERVER] Walk MIB succeeded for {ip_address}", flush=True)
+        return result
     except ValueError as exc:
+        print(f"[STATE-SERVER] Walk MIB failed for {ip_address}: {str(exc)}", flush=True)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        import traceback
+        print(f"[STATE-SERVER] Walk MIB error for {ip_address}: {str(exc)}\n{traceback.format_exc()}", flush=True)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc

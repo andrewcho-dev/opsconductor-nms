@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 import time
 import tempfile
 from datetime import datetime, timezone
@@ -32,6 +33,24 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+
+
+def clean_snmp_data(data):
+    """Recursively clean SNMP data by removing NULL bytes and other problematic characters."""
+    if isinstance(data, dict):
+        return {k: clean_snmp_data(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [clean_snmp_data(item) for item in data]
+    elif isinstance(data, str):
+        return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', data)
+    elif isinstance(data, bytes):
+        try:
+            return data.decode('utf-8', errors='ignore').replace('\x00', '')
+        except:
+            return str(data)
+    else:
+        return data
+
 async def fetch_devices_with_mibs(client: httpx.AsyncClient) -> List[Dict]:
     try:
         resp = await client.get(f"{STATE_SERVER_URL}/api/inventory", timeout=10.0)
@@ -39,7 +58,7 @@ async def fetch_devices_with_mibs(client: httpx.AsyncClient) -> List[Dict]:
         inventory = resp.json()
         return [
             device for device in inventory
-            if device.get("snmp_enabled") and device.get("mib_id")
+            if device.get("snmp_enabled") and (device.get("mib_ids") or device.get("mib_id"))
         ]
     except Exception as e:
         print(f"[MIB-WALKER] Error fetching devices: {e}", flush=True)
@@ -321,9 +340,12 @@ async def update_device_mib_data(client: httpx.AsyncClient, ip: str, mib_data: D
         existing_snmp_data = current.get("snmp_data", {})
         
         merged_data = {**existing_snmp_data, **mib_data}
+        print(f"[MIB-WALKER] Cleaning SNMP data for {ip}", flush=True)
+        cleaned_data = clean_snmp_data(merged_data)
+        print(f"[MIB-WALKER] SNMP data cleaned for {ip}", flush=True)
         
         payload = {
-            "snmp_data": merged_data,
+            "snmp_data": cleaned_data,
             "last_probed": now_iso()
         }
         
@@ -340,6 +362,105 @@ async def update_device_mib_data(client: httpx.AsyncClient, ip: str, mib_data: D
             
     except Exception as e:
         print(f"[MIB-WALKER] Error updating {ip}: {e}", flush=True)
+
+
+async def test_mib_on_device(ip: str, community: str, version: str, mib_id: int, mib_name: str, oid_prefix: Optional[str]) -> Dict[str, Any]:
+    score = 0
+    error_count = 0
+    oid_count = 0
+    
+    try:
+        if oid_prefix:
+            vendor_data = await walk_oid_tree(ip, community, version, oid_prefix, None, max_results=50)
+            oid_count += len(vendor_data)
+            
+            non_empty_values = sum(1 for _, value, _ in vendor_data if value and value.strip() and value != "No Such Object currently exists at this OID")
+            score += non_empty_values * 10
+        
+        system_desc = await get_single_oid(ip, community, version, "1.3.6.1.2.1.1.1.0")
+        if system_desc:
+            oid_count += 1
+            score += 5
+        
+        return {
+            "mib_id": mib_id,
+            "mib_name": mib_name,
+            "score": score,
+            "oid_count": oid_count,
+            "error_count": error_count,
+            "success": score > 0
+        }
+    except Exception as e:
+        return {
+            "mib_id": mib_id,
+            "mib_name": mib_name,
+            "score": 0,
+            "oid_count": 0,
+            "error_count": 1,
+            "success": False,
+            "error": str(e)
+        }
+
+
+async def handle_test_mibs(request):
+    from aiohttp import web
+    import httpx
+    
+    try:
+        data = await request.json()
+        ip_address = data.get("ip_address")
+        mib_ids = data.get("mib_ids", [])
+        
+        if not ip_address:
+            return web.json_response({"error": "ip_address required"}, status=400)
+        
+        if not mib_ids:
+            return web.json_response({"error": "mib_ids required"}, status=400)
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(f"{STATE_SERVER_URL}/api/inventory/{ip_address}")
+            if resp.status_code != 200:
+                return web.json_response({"error": f"Device {ip_address} not found"}, status=404)
+            
+            device = resp.json()
+            ip = device.get("ip_address")
+            community = device.get("snmp_community", "public")
+            version = device.get("snmp_version", "2c")
+            
+            mibs_resp = await client.get(f"{STATE_SERVER_URL}/api/mibs")
+            if mibs_resp.status_code != 200:
+                return web.json_response({"error": "Could not fetch MIBs"}, status=500)
+            
+            all_mibs = mibs_resp.json()
+            mib_lookup = {m["id"]: m for m in all_mibs}
+            
+            results = []
+            for mib_id in mib_ids:
+                mib = mib_lookup.get(mib_id)
+                if not mib:
+                    continue
+                
+                result = await test_mib_on_device(
+                    ip, 
+                    community, 
+                    version, 
+                    mib_id, 
+                    mib["name"], 
+                    mib.get("oid_prefix")
+                )
+                results.append(result)
+                print(f"[MIB-WALKER] Tested {mib['name']} on {ip}: score={result['score']}", flush=True)
+            
+            results.sort(key=lambda x: x["score"], reverse=True)
+            
+            return web.json_response({
+                "ip": ip,
+                "results": results,
+                "best_mib": results[0] if results else None
+            })
+            
+    except Exception as e:
+        return web.json_response({"error": str(e)}, status=500)
 
 
 async def handle_walk_trigger(request):
@@ -360,34 +481,67 @@ async def handle_walk_trigger(request):
             
             device = resp.json()
             
-            if not device.get("mib_id"):
-                return web.json_response({"error": f"Device {ip_address} has no MIB assigned"}, status=400)
+            mib_ids = device.get("mib_ids") or ([device.get("mib_id")] if device.get("mib_id") else [])
+            
+            if not mib_ids:
+                return web.json_response({"error": f"Device {ip_address} has no MIBs assigned"}, status=400)
             
             ip = device.get("ip_address")
             community = device.get("snmp_community", "public")
             version = device.get("snmp_version", "2c")
-            mib_id = device.get("mib_id")
             
             mibs_resp = await client.get(f"{STATE_SERVER_URL}/api/mibs")
-            if mibs_resp.status_code == 200:
-                all_mibs = mibs_resp.json()
-                mib = next((m for m in all_mibs if m["id"] == mib_id), None)
-                mib_name = mib["name"] if mib else "Unknown"
-                oid_prefix = mib.get("oid_prefix") if mib else None
-            else:
+            if mibs_resp.status_code != 200:
                 return web.json_response({"error": "Could not fetch MIBs"}, status=500)
+                
+            all_mibs = mibs_resp.json()
+            mib_lookup = {m["id"]: m for m in all_mibs}
             
-            mib_data = await walk_device(client, ip, community, version, mib_id, mib_name, oid_prefix)
-            if not mib_data:
+            combined_data = {
+                "walked_at": now_iso(),
+                "mib_results": {}
+            }
+            
+            interfaces_combined = {}
+            storage_combined = {}
+            system_combined = {}
+            
+            for mib_id in mib_ids:
+                mib = mib_lookup.get(mib_id)
+                if not mib:
+                    continue
+                    
+                mib_name = mib["name"]
+                oid_prefix = mib.get("oid_prefix")
+                
+                mib_data = await walk_device(client, ip, community, version, mib_id, mib_name, oid_prefix)
+                if mib_data:
+                    combined_data["mib_results"][mib_name] = mib_data
+                    
+                    if "interfaces" in mib_data:
+                        interfaces_combined.update(mib_data["interfaces"])
+                    if "storage" in mib_data:
+                        storage_combined.update(mib_data["storage"])
+                    if "system" in mib_data:
+                        system_combined.update(mib_data["system"])
+            
+            if interfaces_combined:
+                combined_data["interfaces"] = interfaces_combined
+            if storage_combined:
+                combined_data["storage"] = storage_combined
+            if system_combined:
+                combined_data["system"] = system_combined
+            
+            if not combined_data.get("mib_results"):
                 return web.json_response({"error": "MIB walk failed"}, status=500)
             
-            await update_device_mib_data(client, ip, mib_data)
+            await update_device_mib_data(client, ip, combined_data)
             
             return web.json_response({
                 "status": "ok",
                 "ip": ip,
-                "mib": mib_name,
-                "walked_at": mib_data.get("walked_at")
+                "mibs_walked": len(mib_ids),
+                "walked_at": combined_data.get("walked_at")
             })
             
     except Exception as e:
@@ -406,6 +560,7 @@ async def health_server():
     app = web.Application()
     app.router.add_get("/health", handle_health)
     app.router.add_post("/walk", handle_walk_trigger)
+    app.router.add_post("/test-mibs", handle_test_mibs)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", HEALTH_PORT)
@@ -439,28 +594,60 @@ async def walker_loop():
                     ip = device.get("ip_address")
                     community = device.get("snmp_community", "public")
                     version = device.get("snmp_version", "2c")
-                    mib_id = device.get("mib_id")
+                    mib_ids = device.get("mib_ids") or ([device.get("mib_id")] if device.get("mib_id") else [])
                     
-                    if not ip:
+                    if not ip or not mib_ids:
                         continue
                     
                     try:
                         mibs_resp = await client.get(f"{STATE_SERVER_URL}/api/mibs", timeout=10.0)
-                        if mibs_resp.status_code == 200:
-                            all_mibs = mibs_resp.json()
-                            mib = next((m for m in all_mibs if m["id"] == mib_id), None)
-                            mib_name = mib["name"] if mib else "Unknown"
-                            oid_prefix = mib.get("oid_prefix") if mib else None
-                        else:
-                            mib_name = f"MIB-{mib_id}"
-                            oid_prefix = None
-                    except:
-                        mib_name = f"MIB-{mib_id}"
-                        oid_prefix = None
-                    
-                    mib_data = await walk_device(client, ip, community, version, mib_id, mib_name, oid_prefix)
-                    if mib_data:
-                        await update_device_mib_data(client, ip, mib_data)
+                        if mibs_resp.status_code != 200:
+                            continue
+                            
+                        all_mibs = mibs_resp.json()
+                        mib_lookup = {m["id"]: m for m in all_mibs}
+                        
+                        combined_data = {
+                            "walked_at": now_iso(),
+                            "mib_results": {}
+                        }
+                        
+                        interfaces_combined = {}
+                        storage_combined = {}
+                        system_combined = {}
+                        
+                        for mib_id in mib_ids:
+                            mib = mib_lookup.get(mib_id)
+                            if not mib:
+                                continue
+                                
+                            mib_name = mib["name"]
+                            oid_prefix = mib.get("oid_prefix")
+                            
+                            mib_data = await walk_device(client, ip, community, version, mib_id, mib_name, oid_prefix)
+                            if mib_data:
+                                combined_data["mib_results"][mib_name] = mib_data
+                                
+                                if "interfaces" in mib_data:
+                                    interfaces_combined.update(mib_data["interfaces"])
+                                if "storage" in mib_data:
+                                    storage_combined.update(mib_data["storage"])
+                                if "system" in mib_data:
+                                    system_combined.update(mib_data["system"])
+                        
+                        if interfaces_combined:
+                            combined_data["interfaces"] = interfaces_combined
+                        if storage_combined:
+                            combined_data["storage"] = storage_combined
+                        if system_combined:
+                            combined_data["system"] = system_combined
+                        
+                        if combined_data.get("mib_results"):
+                            print(f"[MIB-WALKER] Walked {len(mib_ids)} MIBs for {ip}", flush=True)
+                            await update_device_mib_data(client, ip, combined_data)
+                            
+                    except Exception as e:
+                        print(f"[MIB-WALKER] Error walking {ip}: {e}", flush=True)
                     
                     await asyncio.sleep(1)
                 

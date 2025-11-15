@@ -1,4 +1,5 @@
 import asyncio
+import re
 import copy
 from typing import Any, Dict, List
 
@@ -23,6 +24,19 @@ from .schemas import (
     PatchRequest,
     SeedConfigRequest,
 )
+
+
+
+def clean_snmp_data(data):
+    """Recursively clean SNMP data by removing NULL bytes and other problematic characters."""
+    if isinstance(data, dict):
+        return {k: clean_snmp_data(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [clean_snmp_data(item) for item in data]
+    elif isinstance(data, str):
+        return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', data)
+    else:
+        return data
 
 
 DEFAULT_GRAPH: Dict[str, Any] = {
@@ -208,10 +222,29 @@ class InventoryService:
         if not item:
             raise ValueError(f"IP {ip_address} not found")
         
+        import json
+        
         for key, value in data.model_dump(exclude_unset=True).items():
+            if key == "snmp_data" and isinstance(value, dict):
+                print(f"[STATE-SERVER] Cleaning SNMP data for {ip_address}", flush=True)
+                value = clean_snmp_data(value)
+                print(f"[STATE-SERVER] SNMP data cleaned", flush=True)
             setattr(item, key, value)
         
-        await session.commit()
+        try:
+            await session.commit()
+        except Exception as e:
+            await session.rollback()
+            print(f"[STATE-SERVER] Commit failed for {ip_address}: {e}", flush=True)
+            if "snmp_data" in data.model_dump(exclude_unset=True):
+                import json
+                try:
+                    json_str = json.dumps(data.snmp_data)
+                    print(f"[STATE-SERVER] SNMP data size: {len(json_str)} chars", flush=True)
+                except Exception as je:
+                    print(f"[STATE-SERVER] Cannot serialize snmp_data: {je}", flush=True)
+            raise
+            
         await session.refresh(item)
         return IpInventoryResponse.model_validate(item)
 
@@ -297,6 +330,16 @@ class InventoryService:
                 device_types_lower = [dt.lower() for dt in mib.device_types]
                 if device_type_lower in device_types_lower:
                     score += 50
+                    
+                    mib_name_lower = mib.name.lower()
+                    if device_type_lower == "printer" and ("laserjet" in mib_name_lower or "printer" in mib_name_lower):
+                        score += 25
+                    elif device_type_lower == "switch" and "switch" in mib_name_lower:
+                        score += 25
+                    elif device_type_lower == "router" and "router" in mib_name_lower:
+                        score += 25
+                    elif device_type_lower == "firewall" and "firewall" in mib_name_lower:
+                        score += 25
             
             scored_mibs.append((score, mib))
         
@@ -336,6 +379,8 @@ class InventoryService:
         return vendor.split()[0].title()
     
     async def reassign_mib(self, session: AsyncSession, ip_address: str) -> IpInventoryResponse:
+        import httpx
+        
         result = await session.execute(
             select(IpInventory).where(IpInventory.ip_address == cast(ip_address, INET))
         )
@@ -347,14 +392,48 @@ class InventoryService:
         if not device.snmp_data:
             raise ValueError(f"Device {ip_address} has no SNMP data")
         
+        if not device.snmp_enabled:
+            raise ValueError(f"Device {ip_address} does not have SNMP enabled")
+        
         suggestions = await self.suggest_mibs(session, ip_address)
         if not suggestions:
             raise ValueError(f"No MIB suggestions found for {ip_address}")
         
-        vendor_mibs = [s for s in suggestions if s.vendor.upper() != "IETF"]
-        best_mib = vendor_mibs[0] if vendor_mibs else suggestions[0]
+        best_mib_id = None
+        selected_mib_ids = []
+        score_threshold = 20
         
-        device.mib_id = best_mib.id
+        if len(suggestions) > 1:
+            candidate_mib_ids = [s.id for s in suggestions]
+            
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                try:
+                    resp = await client.post(
+                        "http://mib-walker:9600/test-mibs",
+                        json={"ip_address": ip_address, "mib_ids": candidate_mib_ids}
+                    )
+                    
+                    if resp.status_code == 200:
+                        result_data = resp.json()
+                        all_results = result_data.get("results", [])
+                        
+                        passing_mibs = [r for r in all_results if r.get("score", 0) > score_threshold]
+                        
+                        if passing_mibs:
+                            selected_mib_ids = [r["mib_id"] for r in passing_mibs]
+                            best = passing_mibs[0]
+                            best_mib_id = best["mib_id"]
+                except Exception:
+                    pass
+        
+        if not best_mib_id:
+            vendor_mibs = [s for s in suggestions if s.vendor.upper() != "IETF"]
+            best_mib = vendor_mibs[0] if vendor_mibs else suggestions[0]
+            best_mib_id = best_mib.id
+            selected_mib_ids = [best_mib_id]
+        
+        device.mib_id = best_mib_id
+        device.mib_ids = selected_mib_ids
         await session.commit()
         await session.refresh(device)
         
@@ -362,6 +441,8 @@ class InventoryService:
     
     async def trigger_mib_walk(self, session: AsyncSession, ip_address: str) -> dict:
         import httpx
+        
+        print(f"[STATE-SERVER] trigger_mib_walk called for {ip_address}", flush=True)
         
         result = await session.execute(
             select(IpInventory).where(IpInventory.ip_address == cast(ip_address, INET))
@@ -371,23 +452,31 @@ class InventoryService:
         if not device:
             raise ValueError(f"Device {ip_address} not found")
         
-        if not device.mib_id:
+        mib_ids = device.mib_ids or ([device.mib_id] if device.mib_id else [])
+        print(f"[STATE-SERVER] Device {ip_address} has mib_ids={mib_ids}, mib_id={device.mib_id}", flush=True)
+        
+        if not mib_ids:
             raise ValueError(f"Device {ip_address} has no MIB assigned")
         
         if not device.snmp_enabled:
             raise ValueError(f"Device {ip_address} does not have SNMP enabled")
         
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        print(f"[STATE-SERVER] Calling mib-walker for {ip_address}", flush=True)
+        
+        async with httpx.AsyncClient(timeout=120.0) as client:
             try:
                 resp = await client.post(
                     "http://mib-walker:9600/walk",
                     json={"ip_address": ip_address}
                 )
+                print(f"[STATE-SERVER] mib-walker response: {resp.status_code}", flush=True)
                 if resp.status_code == 200:
                     return resp.json()
                 else:
                     raise ValueError(f"MIB walk failed with status {resp.status_code}: {resp.text}")
-            except httpx.ConnectError:
+            except httpx.ConnectError as e:
+                print(f"[STATE-SERVER] Connection error to mib-walker: {str(e)}", flush=True)
                 raise ValueError("Cannot connect to mib-walker service")
             except Exception as e:
+                print(f"[STATE-SERVER] Exception calling mib-walker: {str(e)}", flush=True)
                 raise ValueError(f"MIB walk request failed: {str(e)}")

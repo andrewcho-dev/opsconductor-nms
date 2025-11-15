@@ -40,10 +40,11 @@ async def get_mib_suggestions(client: httpx.AsyncClient, ip: str) -> List[Dict]:
         return []
 
 
-async def assign_mib(client: httpx.AsyncClient, ip: str, mib_id: int):
+async def assign_mibs(client: httpx.AsyncClient, ip: str, mib_id: int, mib_ids: List[int]):
     try:
         payload = {
             "mib_id": mib_id,
+            "mib_ids": mib_ids,
             "last_probed": now_iso()
         }
         
@@ -54,26 +55,55 @@ async def assign_mib(client: httpx.AsyncClient, ip: str, mib_id: int):
         )
         
         if resp.status_code < 300:
-            print(f"[MIB-ASSIGN] Assigned MIB {mib_id} to {ip}", flush=True)
+            print(f"[MIB-ASSIGN] Assigned {len(mib_ids)} MIBs to {ip} (primary: {mib_id})", flush=True)
             return True
         else:
-            print(f"[MIB-ASSIGN] Failed to assign MIB to {ip}: {resp.status_code}", flush=True)
+            print(f"[MIB-ASSIGN] Failed to assign MIBs to {ip}: {resp.status_code}", flush=True)
             return False
     except Exception as e:
-        print(f"[MIB-ASSIGN] Error assigning MIB to {ip}: {e}", flush=True)
+        print(f"[MIB-ASSIGN] Error assigning MIBs to {ip}: {e}", flush=True)
         return False
 
 
-def select_best_mib(suggestions: List[Dict], vendor: str, device_type: str) -> int | None:
+async def select_mibs(client: httpx.AsyncClient, ip: str, suggestions: List[Dict]) -> tuple[int | None, List[int]]:
     if not suggestions:
-        return None
+        return None, []
+    
+    if len(suggestions) == 1:
+        mib_id = suggestions[0]["id"]
+        return mib_id, [mib_id]
+    
+    mib_ids = [s["id"] for s in suggestions]
+    score_threshold = 20
+    
+    try:
+        resp = await client.post(
+            "http://mib-walker:9600/test-mibs",
+            json={"ip_address": ip, "mib_ids": mib_ids},
+            timeout=60.0
+        )
+        
+        if resp.status_code == 200:
+            result = resp.json()
+            all_results = result.get("results", [])
+            
+            passing_mibs = [r for r in all_results if r.get("score", 0) > score_threshold]
+            
+            if passing_mibs:
+                passing_ids = [r["mib_id"] for r in passing_mibs]
+                best = passing_mibs[0]
+                print(f"[MIB-ASSIGN] Selected {len(passing_ids)} MIBs for {ip}, primary: {best['mib_name']} (score={best['score']})", flush=True)
+                return best["mib_id"], passing_ids
+    except Exception as e:
+        print(f"[MIB-ASSIGN] Error testing MIBs for {ip}: {e}, using first suggestion", flush=True)
     
     vendor_mibs = [s for s in suggestions if s.get("vendor", "").upper() != "IETF"]
-    
     if vendor_mibs:
-        return vendor_mibs[0]["id"]
+        fallback_id = vendor_mibs[0]["id"]
+        return fallback_id, [fallback_id]
     
-    return suggestions[0]["id"]
+    fallback_id = suggestions[0]["id"]
+    return fallback_id, [fallback_id]
 
 
 async def health_server():
@@ -134,14 +164,10 @@ async def assignment_loop():
                     if not suggestions:
                         continue
                     
-                    best_mib_id = select_best_mib(
-                        suggestions,
-                        device.get("vendor", ""),
-                        device.get("device_type", "")
-                    )
+                    best_mib_id, mib_ids = await select_mibs(client, ip, suggestions)
                     
-                    if best_mib_id:
-                        success = await assign_mib(client, ip, best_mib_id)
+                    if best_mib_id and mib_ids:
+                        success = await assign_mibs(client, ip, best_mib_id, mib_ids)
                         if success:
                             assigned_count += 1
                 

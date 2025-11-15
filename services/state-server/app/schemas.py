@@ -134,6 +134,7 @@ class IpInventoryBase(BaseModel):
     snmp_priv_protocol: Optional[str] = None
     snmp_priv_key: Optional[str] = None
     mib_id: Optional[int] = None
+    mib_ids: Optional[List[int]] = None
     
     confidence_score: Optional[float] = None
     classification_notes: Optional[str] = None
@@ -164,6 +165,7 @@ class IpInventoryUpdate(BaseModel):
     snmp_priv_protocol: Optional[str] = None
     snmp_priv_key: Optional[str] = None
     mib_id: Optional[int] = None
+    mib_ids: Optional[List[int]] = None
     confidence_score: Optional[float] = None
     classification_notes: Optional[str] = None
 

@@ -166,6 +166,78 @@ COMMON_MIBS = [
         "description": "Bridge/switch forwarding database and spanning tree"
     },
     {
+        "name": "Q-BRIDGE-MIB",
+        "vendor": "IETF",
+        "device_types": ["switch", "network_device"],
+        "version": "RFC 4363",
+        "oid_prefix": "1.3.6.1.2.1.17.7",
+        "file_path": "/usr/share/snmp/mibs/ietf/Q-BRIDGE-MIB",
+        "description": "VLAN management and 802.1Q bridge configuration"
+    },
+    {
+        "name": "POWER-ETHERNET-MIB",
+        "vendor": "IETF",
+        "device_types": ["switch", "network_device"],
+        "version": "RFC 3621",
+        "oid_prefix": "1.3.6.1.2.1.105",
+        "file_path": "/usr/share/snmp/mibs/ietf/POWER-ETHERNET-MIB",
+        "description": "Power over Ethernet port status and power consumption"
+    },
+    {
+        "name": "LLDP-MIB",
+        "vendor": "IETF",
+        "device_types": ["switch", "router", "network_device"],
+        "version": "IEEE 802.1AB",
+        "oid_prefix": "1.0.8802.1.1.2",
+        "file_path": "/usr/share/snmp/mibs/ietf/LLDP-MIB",
+        "description": "Link Layer Discovery Protocol for neighbor discovery"
+    },
+    {
+        "name": "LLDP-EXT-DOT1-MIB",
+        "vendor": "IETF",
+        "device_types": ["switch", "network_device"],
+        "version": "IEEE 802.1AB",
+        "oid_prefix": "1.0.8802.1.1.2.1.5.32962",
+        "file_path": "/usr/share/snmp/mibs/ietf/LLDP-EXT-DOT1-MIB",
+        "description": "LLDP extensions for VLAN and protocol information"
+    },
+    {
+        "name": "LLDP-EXT-DOT3-MIB",
+        "vendor": "IETF",
+        "device_types": ["switch", "network_device"],
+        "version": "IEEE 802.1AB",
+        "oid_prefix": "1.0.8802.1.1.2.1.5.4623",
+        "file_path": "/usr/share/snmp/mibs/ietf/LLDP-EXT-DOT3-MIB",
+        "description": "LLDP extensions for POE and link aggregation"
+    },
+    {
+        "name": "EtherLike-MIB",
+        "vendor": "IETF",
+        "device_types": ["switch", "router", "network_device"],
+        "version": "RFC 3635",
+        "oid_prefix": "1.3.6.1.2.1.10.7",
+        "file_path": "/usr/share/snmp/mibs/ietf/EtherLike-MIB",
+        "description": "Ethernet interface statistics and error counters"
+    },
+    {
+        "name": "OSPF-MIB",
+        "vendor": "IETF",
+        "device_types": ["router", "network_device"],
+        "version": "RFC 4750",
+        "oid_prefix": "1.3.6.1.2.1.14",
+        "file_path": "/usr/share/snmp/mibs/ietf/OSPF-MIB",
+        "description": "OSPF routing protocol configuration and neighbors"
+    },
+    {
+        "name": "BGP4-MIB",
+        "vendor": "IETF",
+        "device_types": ["router", "network_device"],
+        "version": "RFC 4273",
+        "oid_prefix": "1.3.6.1.2.1.15",
+        "file_path": "/usr/share/snmp/mibs/ietf/BGP4-MIB",
+        "description": "BGP routing protocol peer information"
+    },
+    {
         "name": "CIENA-CES-MIB",
         "vendor": "Ciena",
         "device_types": ["router", "switch", "network_device"],

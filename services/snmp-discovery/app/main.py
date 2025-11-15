@@ -169,15 +169,6 @@ async def update_snmp_data(client: httpx.AsyncClient, ip: str, snmp_data: Dict[s
             "snmp_community": SNMP_COMMUNITY,
             "last_probed": now_iso()
         }
-
-
-
-
-
-
-
-
-        }
         
         if "vendor" in snmp_data:
             payload["vendor"] = snmp_data["vendor"]
