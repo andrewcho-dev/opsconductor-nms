@@ -194,7 +194,7 @@ async def update_snmp_data(client: httpx.AsyncClient, ip: str, snmp_data: Dict[s
         current_resp = await client.get(f"{STATE_SERVER_URL}/api/inventory/{ip}", timeout=10.0)
         if current_resp.status_code == 200:
             current = current_resp.json()
-            existing_snmp_data = current.get("snmp_data", {})
+            existing_snmp_data = current.get("snmp_data") or {}
             merged_snmp_data = {**existing_snmp_data, **snmp_data}
             network_role_confirmed = current.get("network_role_confirmed", False)
         else:
