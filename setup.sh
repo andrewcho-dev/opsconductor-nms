@@ -55,9 +55,23 @@ else
     read -p "Enter gateway IP (e.g., 192.168.1.1): " GATEWAY_IP
 fi
 
-# Optional firewall IP
 read -p "Enter firewall IP (press Enter to skip): " FIREWALL_IP
 
+# Detect server IP
+echo
+echo "🔍 Detecting server IP address..."
+SERVER_IP=$(ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '127.0.0.1' | head -1)
+if [ -n "$SERVER_IP" ]; then
+    echo "Detected server IP: $SERVER_IP"
+    read -p "Use this IP for UI access? [Y/n]: " USE_SERVER_IP
+    if [[ $USE_SERVER_IP =~ ^[Nn] ]]; then
+        read -p "Enter server IP: " SERVER_IP
+    fi
+else
+    read -p "Enter server IP address: " SERVER_IP
+fi
+
+# LLM Configuration
 # LLM Configuration
 echo
 if [ "$HAS_GPU" = true ]; then
@@ -108,6 +122,7 @@ FILTER_BPF=arp or ip or ip6
 ANALYST_URL=http://127.0.0.1:8100/tick
 STATE_SERVER_URL=http://127.0.0.1:8080
 GATEWAY_IP=$GATEWAY_IP
+SERVER_IP=$SERVER_IP
 FIREWALL_IP=$FIREWALL_IP
 
 # LLM Response Format
