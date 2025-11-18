@@ -441,7 +441,12 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
                   </span>
                 </td>
                 <td className="type-cell">
-                  <span className={`type-badge ${device.network_role || "unknown"}`}>
+                  <span 
+                    className={`type-badge ${device.network_role || "unknown"}`}
+                    onClick={() => openSnmpModal(device)}
+                    style={{ cursor: 'pointer' }}
+                    title="Click to configure SNMP and network role"
+                  >
                     {device.network_role === "L2_switch" ? "L2" : device.network_role === "L3_router" ? "L3" : device.network_role || "?"}
                   </span>
                 </td>
@@ -470,7 +475,7 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
                           </span>
                         );
                       })}
-                    {device.snmp_data && (
+                    {device.snmp_data ? (
                       <button
                         className="snmp-badge snmp-enabled"
                         onClick={() => openSnmpModal(device)}
@@ -478,8 +483,16 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
                       >
                         SNMP
                       </button>
+                    ) : (
+                      <button
+                        className="snmp-badge snmp-disabled"
+                        onClick={() => openSnmpModal(device)}
+                        title="Configure SNMP"
+                      >
+                        SNMP
+                      </button>
                     )}
-                    {!device.open_ports && !device.snmp_data && "-"}
+                    {!device.open_ports && "-"}
                   </div>
                 </td>
                 <td className="confidence-cell">
