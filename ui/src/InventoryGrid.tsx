@@ -454,7 +454,9 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
                 <td className="services-cell">
                   <div style={{ display: "flex", gap: "0.25rem", flexWrap: "wrap" }}>
                     {device.open_ports &&
-                      Object.keys(device.open_ports).map((port) => {
+                      Object.keys(device.open_ports)
+                        .filter(port => parseInt(port) !== 161)
+                        .map((port) => {
                         const portNum = parseInt(port);
                         const isClickable = portNum === 80 || portNum === 443 || portNum === 22 || portNum === 23;
                         return (
