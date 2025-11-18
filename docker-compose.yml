@@ -125,8 +125,6 @@ services:
       retries: 10
     restart: unless-stopped
     depends_on:
-      analyst:
-        condition: service_started
       state-server:
         condition: service_started
 

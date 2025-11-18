@@ -142,10 +142,6 @@ services:
     profiles:
       - disabled
   
-  packet-collector:
-    depends_on:
-      state-server:
-        condition: service_started
 EOF
     echo "✅ Created docker-compose.override.yml (AI services disabled)"
 fi
