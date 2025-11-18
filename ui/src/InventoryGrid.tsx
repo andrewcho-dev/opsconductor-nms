@@ -7,6 +7,7 @@ interface InventoryDevice {
   status: string;
   device_type: string | null;
   device_name: string | null;
+  network_role: string | null;
   vendor: string | null;
   model: string | null;
   open_ports: Record<string, any> | null;
@@ -32,6 +33,7 @@ interface InventoryDevice {
 interface InventoryGridProps {
   apiBase: string;
   onNavigateToAdmin: () => void;
+  onNavigateToTopology: () => void;
 }
 
 interface SnmpConfig {
@@ -45,6 +47,7 @@ interface SnmpConfig {
   snmp_priv_protocol: string;
   snmp_priv_key: string;
   mib_id: number | null;
+  network_role: string;
 }
 
 interface Mib {
@@ -128,7 +131,7 @@ function renderComplexValue(value: any, depth: number = 0): React.ReactNode {
   return String(value);
 }
 
-function InventoryGrid({ apiBase, onNavigateToAdmin }: InventoryGridProps) {
+function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: InventoryGridProps) {
   const [devices, setDevices] = useState<InventoryDevice[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -147,6 +150,7 @@ function InventoryGrid({ apiBase, onNavigateToAdmin }: InventoryGridProps) {
     snmp_priv_protocol: "",
     snmp_priv_key: "",
     mib_id: null,
+    network_role: "unknown",
   });
   const [suggestedMibs, setSuggestedMibs] = useState<Mib[]>([]);
   const [allMibs, setAllMibs] = useState<Mib[]>([]);
@@ -158,6 +162,35 @@ function InventoryGrid({ apiBase, onNavigateToAdmin }: InventoryGridProps) {
     const interval = setInterval(loadInventory, 30000);
     return () => clearInterval(interval);
   }, [apiBase]);
+
+  const handlePortClick = (ipAddress: string, port: string) => {
+    const portNum = parseInt(port);
+    
+    if (portNum === 80) {
+      window.open(`http://${ipAddress}`, '_blank');
+    } else if (portNum === 443) {
+      window.open(`https://${ipAddress}`, '_blank');
+    } else if (portNum === 22 || portNum === 23) {
+      const protocol = portNum === 22 ? 'ssh' : 'telnet';
+      const terminalType = localStorage.getItem('terminalType') || 'native';
+      
+      if (terminalType === 'putty') {
+        window.location.href = `putty://${protocol}@${ipAddress}:${portNum}`;
+      } else if (terminalType === 'url') {
+        if (protocol === 'ssh') {
+          window.location.href = `ssh://${ipAddress}`;
+        } else {
+          window.location.href = `telnet://${ipAddress}`;
+        }
+      } else {
+        const message = `To connect to this device:\n\nProtocol: ${protocol.toUpperCase()}\nHost: ${ipAddress}\nPort: ${portNum}\n\nCommand to run:\n${protocol} ${ipAddress}\n\nConfigure terminal settings in Admin for automatic launching.`;
+        
+        if (confirm(message + '\n\nCopy command to clipboard?')) {
+          navigator.clipboard.writeText(`${protocol} ${ipAddress}`);
+        }
+      }
+    }
+  };
 
   const loadInventory = async () => {
     try {
@@ -205,6 +238,7 @@ function InventoryGrid({ apiBase, onNavigateToAdmin }: InventoryGridProps) {
       snmp_priv_protocol: device.snmp_priv_protocol || "",
       snmp_priv_key: device.snmp_priv_key || "",
       mib_id: device.mib_id || null,
+      network_role: device.network_role || "unknown",
     });
 
     try {
@@ -229,7 +263,10 @@ function InventoryGrid({ apiBase, onNavigateToAdmin }: InventoryGridProps) {
       const response = await fetch(`${apiBase}/api/inventory/${snmpModalDevice.ip_address}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(snmpConfig),
+        body: JSON.stringify({
+          ...snmpConfig,
+          network_role_confirmed: true
+        }),
       });
 
       if (!response.ok) throw new Error("Failed to save SNMP config");
@@ -340,6 +377,9 @@ function InventoryGrid({ apiBase, onNavigateToAdmin }: InventoryGridProps) {
           <button onClick={loadInventory} className="refresh-btn">
             Refresh
           </button>
+          <button onClick={onNavigateToTopology} className="admin-btn" style={{ backgroundColor: "#7c3aed" }}>
+            Topology
+          </button>
           <button onClick={onNavigateToAdmin} className="admin-btn">
             Admin
           </button>
@@ -357,6 +397,9 @@ function InventoryGrid({ apiBase, onNavigateToAdmin }: InventoryGridProps) {
               </th>
               <th onClick={() => handleSort("device_type")} className="sortable">
                 Type {sortField === "device_type" ? (sortOrder === "asc" ? "▲" : "▼") : ""}
+              </th>
+              <th onClick={() => handleSort("network_role")} className="sortable">
+                Role {sortField === "network_role" ? (sortOrder === "asc" ? "▲" : "▼") : ""}
               </th>
               <th onClick={() => handleSort("vendor")} className="sortable">
                 Vendor {sortField === "vendor" ? (sortOrder === "asc" ? "▲" : "▼") : ""}
@@ -380,15 +423,36 @@ function InventoryGrid({ apiBase, onNavigateToAdmin }: InventoryGridProps) {
                     {(device.device_type || "unknown").split("_")[0]}
                   </span>
                 </td>
+                <td className="type-cell">
+                  <span className={`type-badge ${device.network_role || "unknown"}`}>
+                    {device.network_role === "L2_switch" ? "L2" : device.network_role === "L3_router" ? "L3" : device.network_role || "?"}
+                  </span>
+                </td>
                 <td className="vendor-cell">{device.vendor || "-"}</td>
                 <td className="services-cell">
                   <div style={{ display: "flex", gap: "0.25rem", flexWrap: "wrap" }}>
                     {device.open_ports &&
-                      Object.keys(device.open_ports).map((port) => (
-                        <span key={port} className="port-badge">
-                          {port}
-                        </span>
-                      ))}
+                      Object.keys(device.open_ports).map((port) => {
+                        const portNum = parseInt(port);
+                        const isClickable = portNum === 80 || portNum === 443 || portNum === 22 || portNum === 23;
+                        return (
+                          <span 
+                            key={port} 
+                            className={`port-badge ${isClickable ? 'clickable' : ''}`}
+                            onClick={isClickable ? () => handlePortClick(device.ip_address, port) : undefined}
+                            style={isClickable ? { cursor: 'pointer' } : undefined}
+                            title={
+                              portNum === 80 ? 'Click to open HTTP' :
+                              portNum === 443 ? 'Click to open HTTPS' :
+                              portNum === 22 ? 'Click to open SSH' :
+                              portNum === 23 ? 'Click to open Telnet' :
+                              undefined
+                            }
+                          >
+                            {port}
+                          </span>
+                        );
+                      })}
                     {device.snmp_data && (
                       <button
                         className="snmp-badge snmp-enabled"
@@ -513,6 +577,18 @@ function InventoryGrid({ apiBase, onNavigateToAdmin }: InventoryGridProps) {
                       </div>
                     </div>
                   )}
+
+                  <label>
+                    <span>Network Role</span>
+                    <select
+                      value={snmpConfig.network_role}
+                      onChange={(e) => setSnmpConfig({ ...snmpConfig, network_role: e.target.value })}
+                    >
+                      <option value="unknown">Unknown</option>
+                      <option value="L2_switch">L2 Switch</option>
+                      <option value="L3_router">L3 Router</option>
+                    </select>
+                  </label>
 
                   {(snmpConfig.snmp_version === "1" || snmpConfig.snmp_version === "2c") && (
                     <label>

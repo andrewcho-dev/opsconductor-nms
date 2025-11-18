@@ -87,7 +87,8 @@ def load_mib_for_resolution() -> Optional[view.MibViewController]:
         
         standard_mibs = [
             'SNMPv2-MIB', 'IF-MIB', 'IP-MIB', 'TCP-MIB', 'UDP-MIB',
-            'HOST-RESOURCES-MIB', 'Printer-MIB', 'BRIDGE-MIB', 'ENTITY-MIB'
+            'HOST-RESOURCES-MIB', 'Printer-MIB', 'BRIDGE-MIB', 'ENTITY-MIB',
+            'LLDP-MIB'
         ]
         
         loaded_count = 0
@@ -288,6 +289,94 @@ async def walk_storage(ip: str, community: str, version: str) -> Dict[str, Any]:
     return storage_data
 
 
+async def walk_lldp_neighbors(ip: str, community: str, version: str) -> Dict[str, Any]:
+    lldp_data = {
+        "local_system": {},
+        "neighbors": []
+    }
+    
+    try:
+        lldp_loc_chassis_id = await get_single_oid(ip, community, version, "1.0.8802.1.1.2.1.3.2.0")
+        lldp_loc_sysname = await get_single_oid(ip, community, version, "1.0.8802.1.1.2.1.3.3.0")
+        lldp_loc_sysdesc = await get_single_oid(ip, community, version, "1.0.8802.1.1.2.1.3.4.0")
+        
+        if lldp_loc_chassis_id:
+            lldp_data["local_system"]["chassis_id"] = lldp_loc_chassis_id
+        if lldp_loc_sysname:
+            lldp_data["local_system"]["sysname"] = lldp_loc_sysname
+        if lldp_loc_sysdesc:
+            lldp_data["local_system"]["sysdesc"] = lldp_loc_sysdesc
+        
+        lldp_rem_chassis_id = await walk_oid_tree(ip, community, version, "1.0.8802.1.1.2.1.4.1.1.5", max_results=100)
+        lldp_rem_port_id = await walk_oid_tree(ip, community, version, "1.0.8802.1.1.2.1.4.1.1.7", max_results=100)
+        lldp_rem_port_desc = await walk_oid_tree(ip, community, version, "1.0.8802.1.1.2.1.4.1.1.8", max_results=100)
+        lldp_rem_sysname = await walk_oid_tree(ip, community, version, "1.0.8802.1.1.2.1.4.1.1.9", max_results=100)
+        lldp_rem_sysdesc = await walk_oid_tree(ip, community, version, "1.0.8802.1.1.2.1.4.1.1.10", max_results=100)
+        
+        neighbor_map = {}
+        
+        for oid, value, _ in lldp_rem_chassis_id:
+            parts = oid.split('.')
+            if len(parts) >= 3:
+                local_port = parts[-2]
+                rem_index = parts[-1]
+                key = f"{local_port}.{rem_index}"
+                if key not in neighbor_map:
+                    neighbor_map[key] = {"local_port": local_port, "remote_index": rem_index}
+                neighbor_map[key]["remote_chassis_id"] = value
+        
+        for oid, value, _ in lldp_rem_port_id:
+            parts = oid.split('.')
+            if len(parts) >= 3:
+                local_port = parts[-2]
+                rem_index = parts[-1]
+                key = f"{local_port}.{rem_index}"
+                if key not in neighbor_map:
+                    neighbor_map[key] = {"local_port": local_port, "remote_index": rem_index}
+                neighbor_map[key]["remote_port_id"] = value
+        
+        for oid, value, _ in lldp_rem_port_desc:
+            parts = oid.split('.')
+            if len(parts) >= 3:
+                local_port = parts[-2]
+                rem_index = parts[-1]
+                key = f"{local_port}.{rem_index}"
+                if key not in neighbor_map:
+                    neighbor_map[key] = {"local_port": local_port, "remote_index": rem_index}
+                neighbor_map[key]["remote_port_desc"] = value
+        
+        for oid, value, _ in lldp_rem_sysname:
+            parts = oid.split('.')
+            if len(parts) >= 3:
+                local_port = parts[-2]
+                rem_index = parts[-1]
+                key = f"{local_port}.{rem_index}"
+                if key not in neighbor_map:
+                    neighbor_map[key] = {"local_port": local_port, "remote_index": rem_index}
+                neighbor_map[key]["remote_sysname"] = value
+        
+        for oid, value, _ in lldp_rem_sysdesc:
+            parts = oid.split('.')
+            if len(parts) >= 3:
+                local_port = parts[-2]
+                rem_index = parts[-1]
+                key = f"{local_port}.{rem_index}"
+                if key not in neighbor_map:
+                    neighbor_map[key] = {"local_port": local_port, "remote_index": rem_index}
+                neighbor_map[key]["remote_sysdesc"] = value
+        
+        lldp_data["neighbors"] = list(neighbor_map.values())
+        
+        if lldp_data["neighbors"]:
+            print(f"[MIB-WALKER] Found {len(lldp_data['neighbors'])} LLDP neighbors on {ip}", flush=True)
+        
+        return lldp_data
+        
+    except Exception as e:
+        print(f"[MIB-WALKER] Error walking LLDP neighbors for {ip}: {e}", flush=True)
+        return lldp_data
+
+
 async def walk_device(client: httpx.AsyncClient, ip: str, community: str, version: str, mib_id: int, mib_name: str, oid_prefix: Optional[str] = None) -> Dict[str, Any]:
     print(f"[MIB-WALKER] Walking device {ip} with MIB {mib_name} (SNMP v{version})", flush=True)
     
@@ -310,6 +399,11 @@ async def walk_device(client: httpx.AsyncClient, ip: str, community: str, versio
         if storage:
             mib_data["storage"] = storage
             print(f"[MIB-WALKER] Found {len(storage)} storage entries on {ip}", flush=True)
+        
+        if "LLDP" in mib_name.upper():
+            lldp_neighbors = await walk_lldp_neighbors(ip, community, version)
+            if lldp_neighbors and lldp_neighbors.get("neighbors"):
+                mib_data["lldp"] = lldp_neighbors
         
         if oid_prefix:
             mib_view = load_mib_for_resolution()
@@ -505,6 +599,7 @@ async def handle_walk_trigger(request):
             interfaces_combined = {}
             storage_combined = {}
             system_combined = {}
+            lldp_data = None
             
             for mib_id in mib_ids:
                 mib = mib_lookup.get(mib_id)
@@ -524,6 +619,8 @@ async def handle_walk_trigger(request):
                         storage_combined.update(mib_data["storage"])
                     if "system" in mib_data:
                         system_combined.update(mib_data["system"])
+                    if "lldp" in mib_data and not lldp_data:
+                        lldp_data = mib_data["lldp"]
             
             if interfaces_combined:
                 combined_data["interfaces"] = interfaces_combined
@@ -531,6 +628,8 @@ async def handle_walk_trigger(request):
                 combined_data["storage"] = storage_combined
             if system_combined:
                 combined_data["system"] = system_combined
+            if lldp_data:
+                combined_data["lldp"] = lldp_data
             
             if not combined_data.get("mib_results"):
                 return web.json_response({"error": "MIB walk failed"}, status=500)

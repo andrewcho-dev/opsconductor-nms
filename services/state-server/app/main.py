@@ -20,6 +20,8 @@ from .schemas import (
     PatchEventResponse,
     PatchRequest,
     SeedConfigRequest,
+    FileSystemItem,
+    TerminalLaunchRequest,
 )
 from .service import GraphService, InventoryService
 
@@ -132,6 +134,166 @@ async def get_inventory_item(ip_address: str, session: AsyncSession = Depends(ge
     if not item:
         raise HTTPException(status_code=404, detail="IP not found")
     return item
+
+
+@app.get("/api/topology/layer2")
+async def get_layer2_topology(session: AsyncSession = Depends(get_session)):
+    from sqlalchemy import select
+    from .models import IpInventory, GraphState
+    
+    result = await session.execute(select(IpInventory))
+    all_devices = result.scalars().all()
+    
+    graph_result = await session.execute(select(GraphState).limit(1))
+    graph_state = graph_result.scalars().first()
+    graph_nodes_map = {}
+    if graph_state and graph_state.graph:
+        graph_nodes = graph_state.graph.get("nodes", {})
+        if isinstance(graph_nodes, dict):
+            graph_nodes_map = graph_nodes
+    
+    nodes = []
+    edges = []
+    seen_edges = set()
+    
+    for device in all_devices:
+        device_ip = str(device.ip_address)
+        
+        node_kind = device.network_role or "unknown"
+        if node_kind == "unknown":
+            if device_ip in graph_nodes_map:
+                graph_node = graph_nodes_map[device_ip]
+                if isinstance(graph_node, dict):
+                    node_kind = graph_node.get("kind", "unknown")
+        
+        nodes.append({
+            "id": device_ip,
+            "label": device.device_name or device_ip,
+            "ip": device_ip,
+            "mac": str(device.mac_address) if device.mac_address else None,
+            "device_type": device.device_type,
+            "network_role": device.network_role,
+            "kind": node_kind,
+            "vendor": device.vendor,
+            "model": device.model
+        })
+        
+        snmp_data = device.snmp_data or {}
+        lldp_data = snmp_data.get("lldp", {})
+        
+        if not lldp_data or not lldp_data.get("neighbors"):
+            continue
+        
+        for neighbor in lldp_data.get("neighbors", []):
+            remote_chassis = neighbor.get("remote_chassis_id", "")
+            remote_sysname = neighbor.get("remote_sysname", "")
+            
+            if not remote_chassis and not remote_sysname:
+                continue
+            
+            from sqlalchemy import or_, func, String
+            import ipaddress
+            query = select(IpInventory)
+            conditions = []
+            if remote_chassis:
+                try:
+                    ipaddress.ip_address(remote_chassis)
+                    conditions.append(func.host(IpInventory.ip_address) == remote_chassis)
+                except ValueError:
+                    chassis_normalized = remote_chassis.replace('-', ':').lower()
+                    conditions.append(func.lower(func.replace(IpInventory.mac_address.cast(String), '-', ':')) == chassis_normalized)
+            if remote_sysname:
+                conditions.append(IpInventory.device_name == remote_sysname)
+            
+            if conditions:
+                result = await session.execute(query.where(or_(*conditions)))
+                remote_device = result.scalars().first()
+                
+                if remote_device:
+                    source_ip = str(device.ip_address)
+                    target_ip = str(remote_device.ip_address)
+                    
+                    edge_key = tuple(sorted([source_ip, target_ip]))
+                    if edge_key not in seen_edges:
+                        seen_edges.add(edge_key)
+                        edges.append({
+                            "from": source_ip,
+                            "to": target_ip,
+                            "label": f"{neighbor.get('local_port', '')} ↔ {neighbor.get('remote_port_id', '')}",
+                            "local_port": neighbor.get("local_port"),
+                            "remote_port": neighbor.get("remote_port_id"),
+                            "remote_port_desc": neighbor.get("remote_port_desc")
+                        })
+    
+    return {
+        "nodes": nodes,
+        "edges": edges
+    }
+
+
+@app.get("/api/inventory/{ip_address}/neighbors")
+async def get_device_neighbors(ip_address: str, session: AsyncSession = Depends(get_session)):
+    from sqlalchemy import or_, func, select, String
+    from .models import IpInventory
+    
+    item = await inventory_service.get_ip(session, ip_address)
+    if not item:
+        raise HTTPException(status_code=404, detail="IP not found")
+    
+    snmp_data = item.snmp_data or {}
+    lldp_data = snmp_data.get("lldp", {})
+    
+    if not lldp_data:
+        return {
+            "ip_address": ip_address,
+            "neighbors": [],
+            "local_system": {},
+            "message": "No LLDP neighbor data available"
+        }
+    
+    neighbors_with_details = []
+    for neighbor in lldp_data.get("neighbors", []):
+        neighbor_info = {
+            "local_port": neighbor.get("local_port"),
+            "remote_chassis_id": neighbor.get("remote_chassis_id"),
+            "remote_port_id": neighbor.get("remote_port_id"),
+            "remote_port_desc": neighbor.get("remote_port_desc"),
+            "remote_sysname": neighbor.get("remote_sysname"),
+            "remote_sysdesc": neighbor.get("remote_sysdesc"),
+        }
+        
+        remote_chassis = neighbor.get("remote_chassis_id", "")
+        remote_sysname = neighbor.get("remote_sysname", "")
+        
+        if remote_chassis or remote_sysname:
+            import ipaddress
+            conditions = []
+            
+            if remote_chassis:
+                try:
+                    ipaddress.ip_address(remote_chassis)
+                    conditions.append(func.host(IpInventory.ip_address) == remote_chassis)
+                except ValueError:
+                    chassis_normalized = remote_chassis.replace('-', ':').lower()
+                    conditions.append(func.lower(func.replace(IpInventory.mac_address.cast(String), '-', ':')) == chassis_normalized)
+            
+            if remote_sysname:
+                conditions.append(IpInventory.device_name == remote_sysname)
+            
+            if conditions:
+                result = await session.execute(select(IpInventory).where(or_(*conditions)))
+                remote_device = result.scalars().first()
+                if remote_device:
+                    neighbor_info["remote_ip"] = str(remote_device.ip_address)
+                    neighbor_info["remote_device_type"] = remote_device.device_type
+        
+        neighbors_with_details.append(neighbor_info)
+    
+    return {
+        "ip_address": ip_address,
+        "local_system": lldp_data.get("local_system", {}),
+        "neighbors": neighbors_with_details
+    }
 
 
 @app.post("/api/inventory", response_model=IpInventoryResponse)
@@ -286,3 +448,90 @@ async def trigger_device_mib_walk(
         import traceback
         print(f"[STATE-SERVER] Walk MIB error for {ip_address}: {str(exc)}\n{traceback.format_exc()}", flush=True)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/launch-terminal")
+async def launch_terminal(request: TerminalLaunchRequest) -> dict:
+    import subprocess
+    import shlex
+    import re
+    try:
+        print(f"[TERMINAL-LAUNCH] Received request: terminal_path={request.terminal_path}, "
+              f"command_template={request.command_template}, host={request.host}, "
+              f"port={request.port}, protocol={request.protocol}", flush=True)
+        
+        command = request.command_template
+        command = command.replace("{host}", request.host)
+        command = command.replace("{port}", str(request.port))
+        command = command.replace("{protocol}", request.protocol)
+        
+        if "{terminal}" in request.terminal_path:
+            terminal_path = request.terminal_path.replace("{terminal}", request.terminal_path)
+        else:
+            terminal_path = request.terminal_path
+        
+        full_command = shlex.split(f'{terminal_path} {command}')
+        print(f"[TERMINAL-LAUNCH] Executing command: {full_command}", flush=True)
+        
+        subprocess.Popen(full_command, start_new_session=True, 
+                        stdin=subprocess.DEVNULL, 
+                        stdout=subprocess.DEVNULL, 
+                        stderr=subprocess.DEVNULL)
+        
+        print(f"[TERMINAL-LAUNCH] Successfully launched terminal", flush=True)
+        return {
+            "status": "ok", 
+            "message": f"Launched terminal: {terminal_path} with command: {command}"
+        }
+    except Exception as exc:
+        print(f"[TERMINAL-LAUNCH] Error: {str(exc)}", flush=True)
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to launch terminal: {str(exc)}") from exc
+
+
+
+@app.get("/api/browse-filesystem")
+async def browse_filesystem(path: str = "/") -> dict:
+    import os
+    from datetime import datetime
+    
+    try:
+        if not os.path.exists(path):
+            raise HTTPException(status_code=404, detail=f"Path does not exist: {path}")
+        
+        if not os.path.isdir(path):
+            raise HTTPException(status_code=400, detail=f"Path is not a directory: {path}")
+        
+        items = []
+        try:
+            entries = os.listdir(path)
+        except PermissionError:
+            raise HTTPException(status_code=403, detail=f"Permission denied: {path}")
+        
+        for entry in sorted(entries):
+            full_path = os.path.join(path, entry)
+            try:
+                stat_info = os.stat(full_path)
+                is_dir = os.path.isdir(full_path)
+                items.append({
+                    "name": entry,
+                    "path": full_path,
+                    "is_dir": is_dir,
+                    "size": stat_info.st_size if not is_dir else None,
+                    "modified": datetime.fromtimestamp(stat_info.st_mtime).isoformat()
+                })
+            except (OSError, PermissionError):
+                continue
+        
+        parent_path = os.path.dirname(path) if path != "/" else None
+        
+        return {
+            "current_path": path,
+            "parent_path": parent_path,
+            "items": items
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to browse filesystem: {str(exc)}") from exc

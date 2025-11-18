@@ -45,15 +45,57 @@ function Admin({ apiBase, onBack }: AdminProps) {
     description: ""
   });
 
-  const [terminalType, setTerminalType] = useState(
-    localStorage.getItem('terminalType') || 'native'
+const [terminalPath, setTerminalPath] = useState(
+    localStorage.getItem('terminalPath') || 'gnome-terminal'
+  );
+  const [commandTemplate, setCommandTemplate] = useState(
+    localStorage.getItem('commandTemplate') || '-e "{protocol} {host}"'
   );
   const [terminalMessage, setTerminalMessage] = useState("");
+  const [showFileBrowser, setShowFileBrowser] = useState(false);
+  const [currentPath, setCurrentPath] = useState("/usr/bin");
+  const [fileSystemItems, setFileSystemItems] = useState<any[]>([]);
+  const [parentPath, setParentPath] = useState<string | null>(null);
+
+  const browseFileSystem = async (path: string) => {
+    try {
+      const response = await fetch(`${apiBase}/api/browse-filesystem?path=${encodeURIComponent(path)}`);
+      if (response.ok) {
+        const data = await response.json();
+        setCurrentPath(data.current_path);
+        setParentPath(data.parent_path);
+        setFileSystemItems(data.items);
+      } else {
+        setTerminalMessage("Failed to browse path: " + path);
+      }
+    } catch (err) {
+      setTerminalMessage("Failed to browse filesystem: " + (err as Error).message);
+    }
+  };
+
+  const handleSelectFile = (path: string) => {
+    setTerminalPath(path);
+    setShowFileBrowser(false);
+  };
 
   const handleSaveTerminalSettings = () => {
-    localStorage.setItem('terminalType', terminalType);
+    localStorage.setItem('terminalPath', terminalPath);
+    localStorage.setItem('commandTemplate', commandTemplate);
     setTerminalMessage("Terminal settings saved successfully");
     setTimeout(() => setTerminalMessage(""), 3000);
+  };
+
+  const terminalPresets = [
+    { name: 'gnome-terminal', path: 'gnome-terminal', template: '-e "{protocol} {host}"' },
+    { name: 'xterm', path: 'xterm', template: '-e {protocol} {host}' },
+    { name: 'konsole', path: 'konsole', template: '-e {protocol} {host}' },
+    { name: 'PuTTY (Windows)', path: 'C:\\Program Files\\PuTTY\\putty.exe', template: '-{protocol} {host} -P {port}' },
+    { name: 'MobaXterm (Windows)', path: 'C:\\Program Files (x86)\\Mobatek\\MobaXterm\\MobaXterm.exe', template: '-exec "{protocol} {host}"' },
+  ];
+
+  const applyPreset = (preset: typeof terminalPresets[0]) => {
+    setTerminalPath(preset.path);
+    setCommandTemplate(preset.template);
   };
 
   const macEnricherUrl = apiBase.replace(':8080', ':9400');

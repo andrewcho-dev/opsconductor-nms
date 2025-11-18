@@ -1153,3 +1153,176 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+.topology-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  background-color: #ffffff;
+  padding: 1rem;
+  grid-column: 1 / -1;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.topology-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.5rem;
+  border-bottom: 2px solid #e2e8f0;
+  flex-shrink: 0;
+}
+
+.topology-header h1 {
+  margin: 0;
+  color: #0f172a;
+  font-size: 1.5rem;
+}
+
+.topology-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.topology-actions button {
+  padding: 0.375rem 0.75rem;
+  background-color: #2563eb;
+  color: #ffffff;
+  border: none;
+  border-radius: 4px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.topology-actions button:hover {
+  background-color: #1d4ed8;
+}
+
+.topology-actions button:disabled {
+  background-color: #94a3b8;
+  cursor: not-allowed;
+}
+
+.topology-main {
+  display: flex;
+  flex: 1;
+  gap: 1rem;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.topology-graph {
+  flex: 1;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  background-color: #f8fafc;
+  position: relative;
+  min-height: 0;
+}
+
+.topology-sidebar {
+  width: 350px;
+  overflow-y: auto;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  padding: 1rem;
+  background-color: #ffffff;
+}
+
+.topology-sidebar h2 {
+  margin: 0 0 1rem 0;
+  color: #0f172a;
+  font-size: 1.25rem;
+  border-bottom: 2px solid #e2e8f0;
+  padding-bottom: 0.5rem;
+}
+
+.topology-sidebar h3 {
+  margin: 1rem 0 0.5rem 0;
+  color: #1e293b;
+  font-size: 1rem;
+}
+
+.device-info p {
+  margin: 0.5rem 0;
+  font-size: 0.875rem;
+  color: #1e293b;
+}
+
+.device-info strong {
+  color: #0f172a;
+}
+
+.neighbors-info {
+  margin-top: 1rem;
+}
+
+.neighbor-card {
+  background-color: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 4px;
+  padding: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.neighbor-card p {
+  margin: 0.25rem 0;
+  font-size: 0.8rem;
+  color: #1e293b;
+}
+
+.neighbor-card strong {
+  color: #0f172a;
+  font-weight: 600;
+}
+
+.neighbor-card .description {
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  color: #64748b;
+  font-style: italic;
+}
+
+.no-neighbors {
+  background-color: #fef3c7;
+  border: 1px solid #fcd34d;
+  border-radius: 4px;
+  padding: 1rem;
+  margin-top: 1rem;
+}
+
+.no-neighbors p {
+  margin: 0;
+  font-size: 0.875rem;
+  color: #92400e;
+}
+
+.topology-stats {
+  display: flex;
+  gap: 2rem;
+  margin-top: 0.75rem;
+  padding-top: 0.5rem;
+  border-top: 2px solid #e2e8f0;
+  font-size: 0.875rem;
+  color: #64748b;
+  flex-shrink: 0;
+}
+
+.topology-stats span {
+  font-weight: 600;
+}
+
+.error-message {
+  background-color: #fee2e2;
+  border: 1px solid #fecaca;
+  border-radius: 4px;
+  padding: 0.75rem;
+  margin-bottom: 1rem;
+  color: #dc2626;
+  font-size: 0.875rem;
+}

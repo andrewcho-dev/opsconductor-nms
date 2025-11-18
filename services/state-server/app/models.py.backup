@@ -48,7 +48,6 @@ class IpInventory(Base):
     device_type = Column(String(50))
     device_type_confirmed = Column(Boolean, default=False)
     network_role = Column(String(50), default="unknown")
-    network_role_confirmed = Column(Boolean, default=False)
     device_name = Column(String(255))
     vendor = Column(String(100))
     model = Column(String(100))

@@ -118,6 +118,8 @@ class IpInventoryBase(BaseModel):
     device_type: Optional[str] = None
     device_type_confirmed: bool = False
     device_name: Optional[str] = None
+    network_role: str = "unknown"
+    network_role_confirmed: bool = False
     vendor: Optional[str] = None
     model: Optional[str] = None
     hostname: Optional[str] = None
@@ -150,6 +152,8 @@ class IpInventoryUpdate(BaseModel):
     device_type: Optional[str] = None
     device_type_confirmed: Optional[bool] = None
     device_name: Optional[str] = None
+    network_role: Optional[str] = None
+    network_role_confirmed: Optional[bool] = None
     vendor: Optional[str] = None
     model: Optional[str] = None
     hostname: Optional[str] = None
@@ -207,3 +211,19 @@ class DeviceConfirmationResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class TerminalLaunchRequest(BaseModel):
+    terminal_path: str
+    command_template: str
+    host: str
+    port: int
+    protocol: str
+
+
+class FileSystemItem(BaseModel):
+    name: str
+    path: str
+    is_dir: bool
+    size: Optional[int] = None
+    modified: Optional[str] = None

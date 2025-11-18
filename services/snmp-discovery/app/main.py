@@ -41,6 +41,8 @@ async def query_snmp(ip: str) -> Optional[tuple[Dict[str, str], str]]:
                 ("sysName", "1.3.6.1.2.1.1.5.0"),
                 ("sysContact", "1.3.6.1.2.1.1.4.0"),
                 ("sysLocation", "1.3.6.1.2.1.1.6.0"),
+                ("sysServices", "1.3.6.1.2.1.1.7.0"),
+                ("ipForwarding", "1.3.6.1.2.1.4.1.0"),
             ]
             
             results = {}
@@ -82,6 +84,41 @@ async def query_snmp(ip: str) -> Optional[tuple[Dict[str, str], str]]:
             continue
     
     return None
+
+
+def determine_network_role(snmp_data: Dict[str, str]) -> str:
+    """
+    Determine network role (L2_switch, L3_router, or unknown) based on SNMP data.
+    
+    Uses:
+    - sysServices (1.3.6.1.2.1.1.7.0): Bitmask where bit 2 = L2, bit 3 = L3
+    - ipForwarding (1.3.6.1.2.1.4.1.0): 1 = forwarding enabled, 2 = disabled
+    """
+    sys_services = snmp_data.get("sysServices", "")
+    ip_forwarding = snmp_data.get("ipForwarding", "")
+    
+    try:
+        services_int = int(sys_services)
+        
+        has_l2 = bool(services_int & 0b00000100)
+        has_l3 = bool(services_int & 0b00001000)
+        
+        forwarding_enabled = ip_forwarding == "1"
+        
+        if has_l3 or forwarding_enabled:
+            return "L3_router"
+        elif has_l2:
+            return "L2_switch"
+        else:
+            return "unknown"
+            
+    except (ValueError, TypeError):
+        pass
+    
+    if ip_forwarding == "1":
+        return "L3_router"
+    
+    return "unknown"
 
 
 def parse_vendor_model(sys_descr: str, sys_oid: str) -> tuple[Optional[str], Optional[str]]:
@@ -159,8 +196,12 @@ async def update_snmp_data(client: httpx.AsyncClient, ip: str, snmp_data: Dict[s
             current = current_resp.json()
             existing_snmp_data = current.get("snmp_data", {})
             merged_snmp_data = {**existing_snmp_data, **snmp_data}
+            network_role_confirmed = current.get("network_role_confirmed", False)
         else:
             merged_snmp_data = snmp_data
+            network_role_confirmed = False
+        
+        network_role = determine_network_role(snmp_data)
         
         payload = {
             "snmp_data": merged_snmp_data,
@@ -169,6 +210,9 @@ async def update_snmp_data(client: httpx.AsyncClient, ip: str, snmp_data: Dict[s
             "snmp_community": SNMP_COMMUNITY,
             "last_probed": now_iso()
         }
+        
+        if not network_role_confirmed:
+            payload["network_role"] = network_role
         
         if "vendor" in snmp_data:
             payload["vendor"] = snmp_data["vendor"]
@@ -183,7 +227,7 @@ async def update_snmp_data(client: httpx.AsyncClient, ip: str, snmp_data: Dict[s
         
         if resp.status_code < 300:
             vendor_model = f"{snmp_data.get('vendor', 'Unknown')}/{snmp_data.get('model', 'Unknown')}"
-            print(f"[SNMP] Updated {ip}: {vendor_model}", flush=True)
+            print(f"[SNMP] Updated {ip}: {vendor_model} (network_role={network_role})", flush=True)
         else:
             print(f"[SNMP] Failed to update {ip}: {resp.status_code}", flush=True)
     except Exception as e:

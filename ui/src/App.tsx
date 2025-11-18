@@ -1,10 +1,11 @@
 import { useState } from "react";
 import InventoryGrid from "./InventoryGrid";
 import Admin from "./Admin";
+import TopologyMap from "./TopologyMap";
 
 const apiBase = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
 
-type Page = "inventory" | "admin";
+type Page = "inventory" | "admin" | "topology";
 
 function App() {
   const [currentPage, setCurrentPage] = useState<Page>("inventory");
@@ -13,10 +14,17 @@ function App() {
     <div className="app">
       <div className="content">
         {currentPage === "inventory" && (
-          <InventoryGrid apiBase={apiBase} onNavigateToAdmin={() => setCurrentPage("admin")} />
+          <InventoryGrid 
+            apiBase={apiBase} 
+            onNavigateToAdmin={() => setCurrentPage("admin")}
+            onNavigateToTopology={() => setCurrentPage("topology")}
+          />
         )}
         {currentPage === "admin" && (
           <Admin apiBase={apiBase} onBack={() => setCurrentPage("inventory")} />
+        )}
+        {currentPage === "topology" && (
+          <TopologyMap apiBase={apiBase} onBack={() => setCurrentPage("inventory")} />
         )}
       </div>
     </div>

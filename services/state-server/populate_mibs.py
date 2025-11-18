@@ -348,6 +348,204 @@ COMMON_MIBS = [
         "file_path": "/usr/share/snmp/mibs/tplink/TPLINK-WIRELESS-MIB",
         "oid_prefix": "1.3.6.1.4.1.11863.3",
         "description": "TP-Link Omada wireless access point configuration and statistics"
+    },
+    {
+        "name": "IDRAC-MIB",
+        "vendor": "Dell",
+        "device_types": ["server", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/dell/IDRAC-MIB",
+        "oid_prefix": "1.3.6.1.4.1.674.10892.5",
+        "description": "Dell iDRAC integrated remote access controller monitoring"
+    },
+    {
+        "name": "DELL-RAC-MIB",
+        "vendor": "Dell",
+        "device_types": ["server", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/dell/DELL-RAC-MIB",
+        "oid_prefix": "1.3.6.1.4.1.674.10892",
+        "description": "Dell Remote Access Controller hardware health and status"
+    },
+    {
+        "name": "DELL10892-MIB",
+        "vendor": "Dell",
+        "device_types": ["server", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/dell/DELL10892-MIB",
+        "oid_prefix": "1.3.6.1.4.1.674.10892",
+        "description": "Dell server hardware status, sensors, and power supply"
+    },
+    {
+        "name": "SIKLU-MIB",
+        "vendor": "Siklu",
+        "device_types": ["radio", "wireless_bridge", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/siklu/SIKLU-MIB",
+        "oid_prefix": "1.3.6.1.4.1.31926",
+        "description": "Siklu millimeter wave radio link status and performance"
+    },
+    {
+        "name": "SIKLU-DEVICE-MIB",
+        "vendor": "Siklu",
+        "device_types": ["radio", "wireless_bridge", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/siklu/SIKLU-DEVICE-MIB",
+        "oid_prefix": "1.3.6.1.4.1.31926",
+        "description": "Siklu device information and configuration"
+    },
+    {
+        "name": "UBNT-MIB",
+        "vendor": "Ubiquiti",
+        "device_types": ["radio", "wireless_bridge", "access_point", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/ubiquiti/UBNT-MIB",
+        "oid_prefix": "1.3.6.1.4.1.41112",
+        "description": "Ubiquiti airMAX radio and UniFi device monitoring"
+    },
+    {
+        "name": "UBNT-UniFi-MIB",
+        "vendor": "Ubiquiti",
+        "device_types": ["access_point", "switch", "router", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/ubiquiti/UBNT-UniFi-MIB",
+        "oid_prefix": "1.3.6.1.4.1.41112.1.6",
+        "description": "Ubiquiti UniFi access point and controller statistics"
+    },
+    {
+        "name": "UBNT-AirMAX-MIB",
+        "vendor": "Ubiquiti",
+        "device_types": ["radio", "wireless_bridge", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/ubiquiti/UBNT-AirMAX-MIB",
+        "oid_prefix": "1.3.6.1.4.1.41112.1.4",
+        "description": "Ubiquiti airMAX wireless link quality and throughput"
+    },
+    {
+        "name": "CISCO-SYSLOG-MIB",
+        "vendor": "Cisco",
+        "device_types": ["firewall", "router", "switch", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/cisco/CISCO-SYSLOG-MIB",
+        "oid_prefix": "1.3.6.1.4.1.9.9.41",
+        "description": "Cisco ASA and device syslog configuration and messages"
+    },
+    {
+        "name": "CISCO-ENTITY-FRU-CONTROL-MIB",
+        "vendor": "Cisco",
+        "device_types": ["firewall", "router", "switch", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/cisco/CISCO-ENTITY-FRU-CONTROL-MIB",
+        "oid_prefix": "1.3.6.1.4.1.9.9.117",
+        "description": "Cisco ASA field replaceable unit power and cooling"
+    },
+    {
+        "name": "CISCO-ENTITY-VENDORTYPE-OID-MIB",
+        "vendor": "Cisco",
+        "device_types": ["firewall", "router", "switch", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/cisco/CISCO-ENTITY-VENDORTYPE-OID-MIB",
+        "oid_prefix": "1.3.6.1.4.1.9.12.3",
+        "description": "Cisco ASA and device hardware identification"
+    },
+    {
+        "name": "CISCO-IPSEC-FLOW-MONITOR-MIB",
+        "vendor": "Cisco",
+        "device_types": ["firewall", "router", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/cisco/CISCO-IPSEC-FLOW-MONITOR-MIB",
+        "oid_prefix": "1.3.6.1.4.1.9.9.171",
+        "description": "Cisco ASA IPSec VPN tunnel monitoring and statistics"
+    },
+    {
+        "name": "CISCO-UNIFIED-FIREWALL-MIB",
+        "vendor": "Cisco",
+        "device_types": ["firewall", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/cisco/CISCO-UNIFIED-FIREWALL-MIB",
+        "oid_prefix": "1.3.6.1.4.1.9.9.491",
+        "description": "Cisco ASA unified threat management statistics"
+    },
+    {
+        "name": "CISCO-ENTITY-SENSOR-MIB",
+        "vendor": "Cisco",
+        "device_types": ["firewall", "router", "switch", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/cisco/CISCO-ENTITY-SENSOR-MIB",
+        "oid_prefix": "1.3.6.1.4.1.9.9.91",
+        "description": "Cisco ASA temperature and hardware sensor monitoring"
+    },
+    {
+        "name": "VERACITY-MIB",
+        "vendor": "Veracity",
+        "device_types": ["ethernet_extender", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/veracity/VERACITY-MIB",
+        "oid_prefix": "1.3.6.1.4.1.32185",
+        "description": "Veracity ethernet over coax extender status and configuration"
+    },
+    {
+        "name": "VERACITY-DEVICE-MIB",
+        "vendor": "Veracity",
+        "device_types": ["ethernet_extender", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/veracity/VERACITY-DEVICE-MIB",
+        "oid_prefix": "1.3.6.1.4.1.32185",
+        "description": "Veracity device information and link quality monitoring"
+    },
+    {
+        "name": "MILESTONE-MIB",
+        "vendor": "Milestone",
+        "device_types": ["vms", "nvr", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/milestone/MILESTONE-MIB",
+        "oid_prefix": "1.3.6.1.4.1.35901",
+        "description": "Milestone XProtect VMS server status and recording statistics"
+    },
+    {
+        "name": "MILESTONE-XPROTECT-MIB",
+        "vendor": "Milestone",
+        "device_types": ["vms", "nvr", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/milestone/MILESTONE-XPROTECT-MIB",
+        "oid_prefix": "1.3.6.1.4.1.35901",
+        "description": "Milestone XProtect camera status, recording server health, and storage monitoring"
+    },
+    {
+        "name": "CIENA-WS-MIB",
+        "vendor": "Ciena",
+        "device_types": ["switch", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/ciena/CIENA-WS-MIB",
+        "oid_prefix": "1.3.6.1.4.1.1271",
+        "description": "Ciena Waveserver and 3000 series switch platform monitoring"
+    },
+    {
+        "name": "CIENA-WS-TYPEDEFS-MIB",
+        "vendor": "Ciena",
+        "device_types": ["switch", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/ciena/CIENA-WS-TYPEDEFS-MIB",
+        "oid_prefix": "1.3.6.1.4.1.1271",
+        "description": "Ciena switch type definitions and common objects"
+    },
+    {
+        "name": "CIENA-CES-CHASSIS-MIB",
+        "vendor": "Ciena",
+        "device_types": ["switch", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/ciena/CIENA-CES-CHASSIS-MIB",
+        "oid_prefix": "1.3.6.1.4.1.6141",
+        "description": "Ciena switch chassis hardware inventory and status"
+    },
+    {
+        "name": "CIENA-CES-PORT-MIB",
+        "vendor": "Ciena",
+        "device_types": ["switch", "network_device"],
+        "version": "1.0",
+        "file_path": "/usr/share/snmp/mibs/ciena/CIENA-CES-PORT-MIB",
+        "oid_prefix": "1.3.6.1.4.1.6141",
+        "description": "Ciena switch port configuration and statistics"
     }
 ]
 
