@@ -346,7 +346,21 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
     if (aVal == null && bVal == null) return 0;
     if (aVal == null) return 1;
     if (bVal == null) return -1;
-    const comparison = String(aVal).localeCompare(String(bVal));
+    
+    let comparison = 0;
+    if (sortField === "ip_address") {
+      const aOctets = String(aVal).split('.').map(Number);
+      const bOctets = String(bVal).split('.').map(Number);
+      for (let i = 0; i < 4; i++) {
+        if (aOctets[i] !== bOctets[i]) {
+          comparison = aOctets[i] - bOctets[i];
+          break;
+        }
+      }
+    } else {
+      comparison = String(aVal).localeCompare(String(bVal));
+    }
+    
     return sortOrder === "asc" ? comparison : -comparison;
   });
 
