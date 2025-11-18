@@ -99,17 +99,40 @@ MAC Enricher  MIB      MIB      LLM
 
 ## Quick Start
 
+### Option A: Automated Setup (Recommended)
+
+The setup script automatically detects your hardware and configures the system:
+
+```bash
+# Clone repository
+git clone https://github.com/andrewcho-dev/opsconductor-nms.git
+cd opsconductor-nms
+
+# Run automated setup
+./setup.sh
+```
+
+The script will:
+- ✅ Detect NVIDIA GPU (or configure CPU-only mode)
+- ✅ Detect network interfaces
+- ✅ Detect gateway IP
+- ✅ Create `.env` configuration
+- ✅ Configure docker-compose for your hardware
+
+**CPU-Only Mode**: If no GPU is detected, AI classification is disabled but all other features work perfectly.
+
+### Option B: Manual Setup
+
 ### 1. Clone Repository
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/andrewcho-dev/opsconductor-nms.git
 cd opsconductor-nms
 ```
 
 ### 2. Configure Environment
 
 ```bash
-cp .env.example .env
 nano .env
 ```
 
@@ -119,7 +142,7 @@ nano .env
 # Network interface for packet capture (IMPORTANT!)
 PCAP_IFACE=eth0                     # Change to your interface (ip addr show)
 
-# LLM Model
+# LLM Model (GPU required)
 MODEL_NAME=microsoft/Phi-3-mini-4k-instruct
 VLLM_MAX_CONTEXT_LEN=8192
 
@@ -130,6 +153,19 @@ FIREWALL_IP=                        # Your firewall IP (if known)
 # Scanning configuration
 SCAN_PORTS=22,23,80,443,554,1883,5060,8080,8443,161,179,3389
 SNMP_COMMUNITY=public               # Default SNMP community string
+```
+
+**For CPU-only deployment**, create `docker-compose.override.yml`:
+
+```yaml
+# Disable GPU-dependent services
+services:
+  vllm:
+    profiles:
+      - disabled
+  analyst:
+    profiles:
+      - disabled
 ```
 
 ### 3. Start Services
