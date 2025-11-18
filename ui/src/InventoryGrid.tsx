@@ -377,6 +377,9 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
     <div className="inventory-container">
       <div className="inventory-header">
         <div className="inventory-filters">
+          <div style={{ fontWeight: "bold", marginRight: "1rem" }}>
+            Devices: {filteredDevices.length}{filterType ? ` (of ${devices.length} total)` : ""}
+          </div>
           <label>
             Filter by type:
             <select value={filterType} onChange={(e) => setFilterType(e.target.value)}>
