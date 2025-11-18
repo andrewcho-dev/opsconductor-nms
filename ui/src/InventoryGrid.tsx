@@ -422,6 +422,7 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
                 Vendor {sortField === "vendor" ? (sortOrder === "asc" ? "▲" : "▼") : ""}
               </th>
               <th>Services</th>
+              <th>SNMP</th>
               <th onClick={() => handleSort("confidence_score")} className="sortable">
                 Conf {sortField === "confidence_score" ? (sortOrder === "asc" ? "▲" : "▼") : ""}
               </th>
@@ -451,6 +452,25 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
                   </span>
                 </td>
                 <td className="vendor-cell">{device.vendor || "-"}</td>
+                <td className="snmp-cell">
+                  {device.snmp_data ? (
+                    <button
+                      className="snmp-badge snmp-enabled"
+                      onClick={() => openSnmpModal(device)}
+                      title="SNMP Discovered - Click for details"
+                    >
+                      SNMP
+                    </button>
+                  ) : (
+                    <button
+                      className="snmp-badge snmp-disabled"
+                      onClick={() => openSnmpModal(device)}
+                      title="Configure SNMP"
+                    >
+                      SNMP
+                    </button>
+                  )}
+                </td>
                 <td className="services-cell">
                   <div style={{ display: "flex", gap: "0.25rem", flexWrap: "wrap" }}>
                     {device.open_ports &&
@@ -477,23 +497,6 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
                           </span>
                         );
                       })}
-                    {device.snmp_data ? (
-                      <button
-                        className="snmp-badge snmp-enabled"
-                        onClick={() => openSnmpModal(device)}
-                        title="SNMP Discovered - Click for details"
-                      >
-                        SNMP
-                      </button>
-                    ) : (
-                      <button
-                        className="snmp-badge snmp-disabled"
-                        onClick={() => openSnmpModal(device)}
-                        title="Configure SNMP"
-                      >
-                        SNMP
-                      </button>
-                    )}
                     {!device.open_ports && "-"}
                   </div>
                 </td>
