@@ -54,8 +54,16 @@ class IpInventory(Base):
     model = Column(String(100))
     
     hostname = Column(String(255))
+    all_hostnames = Column(ARRAY(String))
     open_ports = Column(JSONB)
     snmp_data = Column(JSONB)
+    
+    os_name = Column(String(255))
+    os_accuracy = Column(String(10))
+    os_detection = Column(JSONB)
+    uptime_seconds = Column(String(50))
+    host_scripts = Column(JSONB)
+    nmap_scan_time = Column(DateTime(timezone=True))
     
     snmp_enabled = Column(Boolean, default=False)
     snmp_port = Column(Integer, default=161)
@@ -95,3 +103,20 @@ class DeviceConfirmation(Base):
     confirmed_at = Column(DateTime(timezone=True), server_default=func.now())
     
     device = relationship("IpInventory", back_populates="confirmations")
+
+
+class DiscoveredNetwork(Base):
+    __tablename__ = "discovered_networks"
+
+    id = Column(Integer, primary_key=True)
+    network = Column(String(50), unique=True, nullable=False, index=True)
+    destination = Column(INET)
+    netmask = Column(INET)
+    next_hop = Column(INET)
+    prefix_len = Column(Integer)
+    num_addresses = Column(Integer)
+    directly_connected = Column(Boolean, default=False)
+    gateway_ip = Column(INET)
+    discovered_at = Column(DateTime(timezone=True), server_default=func.now())
+    last_seen = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    metadata = Column(JSONB)

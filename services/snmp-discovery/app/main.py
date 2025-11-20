@@ -1,33 +1,157 @@
-import asyncio
 import os
-import time
+import asyncio
+import re
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
-
-import httpx
+from typing import Optional, Dict
 from pysnmp.hlapi.asyncio import (
-    CommunityData,
-    ContextData,
-    ObjectIdentity,
-    ObjectType,
-    SnmpEngine,
-    UdpTransportTarget,
-    getCmd,
+    getCmd, nextCmd, bulkCmd, walkCmd,
+    SnmpEngine, CommunityData, UdpTransportTarget, ContextData,
+    ObjectType, ObjectIdentity
 )
+import httpx
 
 
-STATE_SERVER_URL = os.getenv("STATE_SERVER_URL", "http://127.0.0.1:8080")
-SCAN_INTERVAL_SECONDS = int(os.getenv("SCAN_INTERVAL_SECONDS", "300"))
-SNMP_COMMUNITY = os.getenv("SNMP_COMMUNITY", "public")
-SNMP_TIMEOUT = float(os.getenv("SNMP_TIMEOUT", "2.0"))
-SNMP_RETRIES = int(os.getenv("SNMP_RETRIES", "1"))
-HEALTH_PORT = int(os.getenv("HEALTH_PORT", "9300"))
+STATE_SERVER_URL = os.environ.get("STATE_SERVER_URL", "http://state-server:8080")
+SNMP_COMMUNITY = os.environ.get("SNMP_COMMUNITY", "public")
+SNMP_TIMEOUT = float(os.environ.get("SNMP_TIMEOUT", "1.0"))
+SNMP_RETRIES = int(os.environ.get("SNMP_RETRIES", "0"))
+SCAN_INTERVAL_SECONDS = int(os.environ.get("SCAN_INTERVAL_SECONDS", "300"))
 
-stop_event = asyncio.Event()
+
+async def fetch_inventory(client: httpx.AsyncClient) -> list:
+    try:
+        resp = await client.get(f"{STATE_SERVER_URL}/api/inventory", timeout=10.0)
+        if resp.status_code == 200:
+            return resp.json()
+    except Exception as e:
+        print(f"[SNMP] Failed to fetch inventory: {e}", flush=True)
+    return []
 
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+
+def normalize_ip_address(value) -> str:
+    """Convert SNMP IP address value to dotted decimal format."""
+    try:
+        print(f"[DEBUG] normalize_ip_address called with type={type(value).__name__}, value={repr(value)[:100]}, hasattr asNumbers={hasattr(value, 'asNumbers')}", flush=True)
+        
+        if isinstance(value, str) and re.match(r'^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$', value):
+            return value
+        
+        if hasattr(value, 'asNumbers'):
+            octets = list(value.asNumbers())
+            if len(octets) == 4:
+                return '.'.join(str(octet) for octet in octets)
+        
+        if isinstance(value, str):
+            byte_values = [ord(c) for c in value]
+            if len(byte_values) == 4:
+                return '.'.join(str(b) for b in byte_values)
+        
+        return str(value)
+    except Exception as e:
+        print(f"[DEBUG] Failed to normalize IP address: {e}", flush=True)
+        return str(value)
+
+
+def determine_network_role(snmp_data: Dict[str, str]) -> str:
+    import ipaddress
+    
+    ip_forwarding_str = snmp_data.get("ipForwarding", "").strip()
+    stp_enabled_str = snmp_data.get("stp_enabled", "0")
+    
+    try:
+        stp_enabled = int(stp_enabled_str)
+    except (ValueError, TypeError):
+        stp_enabled = 0
+    
+    if ip_forwarding_str == "1":
+        routing_table = snmp_data.get("routing_table", [])
+        
+        if routing_table:
+            inter_subnet_routes = 0
+            seen_networks = set()
+            
+            for route in routing_table:
+                dest = route.get("destination", "")
+                mask = route.get("mask", "")
+                next_hop = route.get("next_hop", "")
+                
+                if dest == "0.0.0.0":
+                    continue
+                
+                if next_hop == "0.0.0.0" or next_hop == dest:
+                    continue
+                
+                try:
+                    network = ipaddress.IPv4Network(f"{dest}/{mask}", strict=False)
+                    network_str = str(network.with_prefixlen)
+                    
+                    if network_str not in seen_networks:
+                        seen_networks.add(network_str)
+                        inter_subnet_routes += 1
+                except (ValueError, ipaddress.AddressValueError):
+                    continue
+            
+            print(f"[SNMP] L3 Detection: ipForwarding={ip_forwarding_str}, total_routes={len(routing_table)}, inter_subnet_routes={inter_subnet_routes}", flush=True)
+            
+            if inter_subnet_routes > 0:
+                return "L3"
+    
+    if stp_enabled > 0:
+        return "L2"
+    
+    return "Endpoint"
+
+
+def parse_vendor_model(sys_descr: str, sys_oid: str) -> tuple[Optional[str], Optional[str]]:
+    vendor = None
+    model = None
+    
+    descr_lower = sys_descr.lower()
+    
+    if "cisco" in descr_lower:
+        vendor = "Cisco"
+        if "catalyst" in descr_lower:
+            model = "Catalyst"
+        elif "nexus" in descr_lower:
+            model = "Nexus"
+        elif "asr" in descr_lower:
+            model = "ASR"
+        elif "isr" in descr_lower:
+            model = "ISR"
+    elif "juniper" in descr_lower or "junos" in descr_lower:
+        vendor = "Juniper"
+        if "mx" in descr_lower:
+            model = "MX"
+        elif "ex" in descr_lower:
+            model = "EX"
+        elif "srx" in descr_lower:
+            model = "SRX"
+    elif "arista" in descr_lower:
+        vendor = "Arista"
+    elif "dell" in descr_lower or "powerconnect" in descr_lower:
+        vendor = "Dell"
+    elif "hp" in descr_lower or "hewlett" in descr_lower:
+        vendor = "HP"
+    elif "microsoft" in descr_lower or "windows" in descr_lower:
+        vendor = "Microsoft"
+        model = "Windows"
+    elif "eaton" in descr_lower or "ups" in descr_lower.lower():
+        vendor = "Eaton"
+        model = "UPS"
+    elif "axis" in descr_lower:
+        vendor = "Axis"
+        model = "Camera"
+    elif "tc communication" in descr_lower or "tc comm" in descr_lower:
+        vendor = "TC Communication"
+    elif "planet" in descr_lower:
+        vendor = "Planet"
+    
+    return vendor, model
 
 
 async def query_snmp(ip: str) -> Optional[tuple[Dict[str, str], str]]:
@@ -43,6 +167,7 @@ async def query_snmp(ip: str) -> Optional[tuple[Dict[str, str], str]]:
                 ("sysLocation", "1.3.6.1.2.1.1.6.0"),
                 ("sysServices", "1.3.6.1.2.1.1.7.0"),
                 ("ipForwarding", "1.3.6.1.2.1.4.1.0"),
+                ("stpProtocol", "1.3.6.1.2.1.17.2.1.0"),
             ]
             
             results = {}
@@ -70,126 +195,104 @@ async def query_snmp(ip: str) -> Optional[tuple[Dict[str, str], str]]:
                 except Exception:
                     continue
             
-            snmpEngine.closeDispatcher()
+            if not results:
+                snmpEngine.closeDispatcher()
+                continue
             
-            if results:
-                vendor, model = parse_vendor_model(results.get("sysDescr", ""), results.get("sysObjectID", ""))
-                if vendor:
-                    results["vendor"] = vendor
-                if model:
-                    results["model"] = model
-                return (results, version)
+            vendor, model = parse_vendor_model(results.get("sysDescr", ""), results.get("sysObjectID", ""))
+            if vendor:
+                results["vendor"] = vendor
+            if model:
+                results["model"] = model
+            
+            stp_protocol = results.get("stpProtocol", "")
+            if stp_protocol and stp_protocol != "":
+                results["stp_enabled"] = "1"
+            else:
+                results["stp_enabled"] = "0"
+            
+            route_count = 0
+            try:
+                walk_timeout = min(0.5, SNMP_TIMEOUT)
+                async for errorIndication, errorStatus, errorIndex, varBinds in walkCmd(
+                    snmpEngine,
+                    CommunityData(SNMP_COMMUNITY, mpModel=mpModel),
+                    UdpTransportTarget((ip, 161), timeout=walk_timeout, retries=0),
+                    ContextData(),
+                    ObjectType(ObjectIdentity("1.3.6.1.2.1.4.21.1.1"))
+                ):
+                    if not errorIndication and not errorStatus:
+                        route_count += 1
+                        if route_count > 3:
+                            break
+            except Exception:
+                pass
+            
+            results["route_count"] = str(route_count)
+            
+            snmpEngine.closeDispatcher()
+            return results, version
             
         except Exception:
+            try:
+                snmpEngine.closeDispatcher()
+            except:
+                pass
             continue
     
     return None
 
 
-def determine_network_role(snmp_data: Dict[str, str]) -> str:
-    """
-    Determine network role (L2_switch, L3_router, or unknown) based on SNMP data.
-    
-    Uses:
-    - sysServices (1.3.6.1.2.1.1.7.0): Bitmask where bit 2 = L2, bit 3 = L3
-    - ipForwarding (1.3.6.1.2.1.4.1.0): 1 = forwarding enabled, 2 = disabled
-    """
-    sys_services = snmp_data.get("sysServices", "")
-    ip_forwarding = snmp_data.get("ipForwarding", "")
+async def query_routing_table(ip: str, version: str) -> list:
+    routing_table = []
+    mpModel = 1 if version == "2c" else 0
     
     try:
-        services_int = int(sys_services)
+        snmpEngine = SnmpEngine()
         
-        has_l2 = bool(services_int & 0b00000100)
-        has_l3 = bool(services_int & 0b00001000)
-        
-        forwarding_enabled = ip_forwarding == "1"
-        
-        if has_l3 or forwarding_enabled:
-            return "L3_router"
-        elif has_l2:
-            return "L2_switch"
-        else:
-            return "unknown"
+        async for errorIndication, errorStatus, errorIndex, varBinds in walkCmd(
+            snmpEngine,
+            CommunityData(SNMP_COMMUNITY, mpModel=mpModel),
+            UdpTransportTarget((ip, 161), timeout=SNMP_TIMEOUT, retries=SNMP_RETRIES),
+            ContextData(),
+            ObjectType(ObjectIdentity("1.3.6.1.2.1.4.21.1.1")),
+            ObjectType(ObjectIdentity("1.3.6.1.2.1.4.21.1.7")),
+            ObjectType(ObjectIdentity("1.3.6.1.2.1.4.21.1.11")),
+            ObjectType(ObjectIdentity("1.3.6.1.2.1.4.21.1.2"))
+        ):
+            if errorIndication or errorStatus:
+                break
             
-    except (ValueError, TypeError):
-        pass
-    
-    if ip_forwarding == "1":
-        return "L3_router"
-    
-    return "unknown"
-
-
-def parse_vendor_model(sys_descr: str, sys_oid: str) -> tuple[Optional[str], Optional[str]]:
-    vendor = None
-    model = None
-    
-    descr_lower = sys_descr.lower()
-    
-    if "cisco" in descr_lower:
-        vendor = "Cisco"
-        if "catalyst" in descr_lower:
-            model = "Catalyst"
-        elif "nexus" in descr_lower:
-            model = "Nexus"
-        elif "asr" in descr_lower:
-            model = "ASR"
-        elif "isr" in descr_lower:
-            model = "ISR"
-    elif "juniper" in descr_lower or "junos" in descr_lower:
-        vendor = "Juniper"
-        if "mx" in descr_lower:
-            model = "MX"
-        elif "ex" in descr_lower:
-            model = "EX"
-        elif "qfx" in descr_lower:
-            model = "QFX"
-    elif "arista" in descr_lower:
-        vendor = "Arista"
-        if "7050" in descr_lower:
-            model = "7050"
-        elif "7280" in descr_lower:
-            model = "7280"
-    elif "linux" in descr_lower:
-        vendor = "Linux"
-        if "ubuntu" in descr_lower:
-            model = "Ubuntu"
-        elif "debian" in descr_lower:
-            model = "Debian"
-        elif "centos" in descr_lower:
-            model = "CentOS"
-        elif "rhel" in descr_lower or "red hat" in descr_lower:
-            model = "RHEL"
-    elif "windows" in descr_lower:
-        vendor = "Microsoft"
-        model = "Windows"
-    elif "hp" in descr_lower or "hewlett" in descr_lower:
-        vendor = "HP"
-    elif "dell" in descr_lower:
-        vendor = "Dell"
-    
-    if sys_oid.startswith("1.3.6.1.4.1.9"):
-        vendor = vendor or "Cisco"
-    elif sys_oid.startswith("1.3.6.1.4.1.2636"):
-        vendor = vendor or "Juniper"
-    elif sys_oid.startswith("1.3.6.1.4.1.30065"):
-        vendor = vendor or "Arista"
-    
-    return vendor, model
-
-
-async def fetch_inventory(client: httpx.AsyncClient) -> List[Dict]:
-    try:
-        resp = await client.get(f"{STATE_SERVER_URL}/api/inventory", timeout=10.0)
-        resp.raise_for_status()
-        return resp.json()
+            if len(varBinds) >= 4:
+                dest = normalize_ip_address(varBinds[0][1])
+                mask = normalize_ip_address(varBinds[1][1])
+                next_hop = normalize_ip_address(varBinds[2][1])
+                if_index = str(varBinds[3][1])
+                
+                routing_table.append({
+                    "destination": dest,
+                    "mask": mask,
+                    "next_hop": next_hop,
+                    "interface": if_index
+                })
+        
+        snmpEngine.closeDispatcher()
+        
+        if routing_table:
+            print(f"[SNMP] Retrieved {len(routing_table)} routing table entries from {ip}", flush=True)
+        
+        return routing_table
+        
     except Exception as e:
-        print(f"[SNMP] Error fetching inventory: {e}", flush=True)
+        print(f"[SNMP] Error querying routing table for {ip}: {e}", flush=True)
+        try:
+            snmpEngine.closeDispatcher()
+        except:
+            pass
         return []
 
 
-async def update_snmp_data(client: httpx.AsyncClient, ip: str, snmp_data: Dict[str, str], version: str):
+async def update_device(client: httpx.AsyncClient, ip: str, snmp_data: Dict[str, str], version: str):
     try:
         current_resp = await client.get(f"{STATE_SERVER_URL}/api/inventory/{ip}", timeout=10.0)
         if current_resp.status_code == 200:
@@ -201,7 +304,12 @@ async def update_snmp_data(client: httpx.AsyncClient, ip: str, snmp_data: Dict[s
             merged_snmp_data = snmp_data
             network_role_confirmed = False
         
-        network_role = determine_network_role(snmp_data)
+        if snmp_data.get("ipForwarding") == "1":
+            routing_table = await query_routing_table(ip, version)
+            if routing_table:
+                merged_snmp_data["routing_table"] = routing_table
+        
+        network_role = determine_network_role(merged_snmp_data)
         
         payload = {
             "snmp_data": merged_snmp_data,
@@ -227,92 +335,63 @@ async def update_snmp_data(client: httpx.AsyncClient, ip: str, snmp_data: Dict[s
         
         if resp.status_code < 300:
             vendor_model = f"{snmp_data.get('vendor', 'Unknown')}/{snmp_data.get('model', 'Unknown')}"
-            print(f"[SNMP] Updated {ip}: {vendor_model} (network_role={network_role})", flush=True)
+            ip_fwd = snmp_data.get('ipForwarding', '?')
+            print(f"[SNMP] Updated {ip}: {vendor_model} (network_role={network_role}, ipForwarding={ip_fwd}, stp={snmp_data.get('stp_enabled', '?')}, routes={snmp_data.get('route_count', '?')})", flush=True)
         else:
             print(f"[SNMP] Failed to update {ip}: {resp.status_code}", flush=True)
     except Exception as e:
         print(f"[SNMP] Error updating {ip}: {e}", flush=True)
 
 
+async def reprocess_existing_snmp_data(client: httpx.AsyncClient):
+    try:
+        inventory = await fetch_inventory(client)
+        processed = 0
+        for item in inventory:
+            ip = item.get("ip_address")
+            snmp_data = item.get("snmp_data") or {}
+            network_role_confirmed = item.get("network_role_confirmed", False)
+            
+            if ip and snmp_data and not network_role_confirmed:
+                detected = determine_network_role(snmp_data)
+                current_role = item.get("network_role", "unknown")
+                
+                if detected != current_role:
+                    try:
+                        await client.put(f"{STATE_SERVER_URL}/api/inventory/{ip}", json={"network_role": detected}, timeout=10.0)
+                        processed += 1
+                        print(f"[SNMP] Reclassified {ip}: {current_role} -> {detected}", flush=True)
+                    except Exception as e:
+                        print(f"[SNMP] Failed to reclassify {ip}: {e}", flush=True)
+        if processed > 0:
+            print(f"[SNMP] Reprocessed {processed} devices with existing SNMP data", flush=True)
+    except Exception as e:
+        print(f"[SNMP] Error reprocessing: {e}", flush=True)
+
+
 async def health_server():
     from aiohttp import web
     
-    async def handle_health(_):
+    async def handle_health(request):
         return web.json_response({
-            "status": "ok",
-            "scan_interval": SCAN_INTERVAL_SECONDS,
-            "snmp_community": SNMP_COMMUNITY
+            "status": "healthy",
+            "service": "snmp-discovery",
+            "timestamp": now_iso()
         })
     
     app = web.Application()
     app.router.add_get("/health", handle_health)
+    
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", HEALTH_PORT)
+    site = web.TCPSite(runner, '0.0.0.0', 9300)
     await site.start()
-    
-    while not stop_event.is_set():
-        await asyncio.sleep(0.5)
-
-
-async def discovery_loop():
-    print(f"[SNMP] Starting SNMP discovery (interval={SCAN_INTERVAL_SECONDS}s, community={SNMP_COMMUNITY})", flush=True)
-    
-    async with httpx.AsyncClient() as client:
-        while not stop_event.is_set():
-            try:
-                start_time = time.monotonic()
-                inventory = await fetch_inventory(client)
-                
-                if not inventory:
-                    print("[SNMP] No devices in inventory, waiting...", flush=True)
-                    await asyncio.sleep(SCAN_INTERVAL_SECONDS)
-                    continue
-                
-                snmp_devices = [item for item in inventory if (item.get("open_ports") or {}).get("161") is not None]
-                
-                if not snmp_devices:
-                    print("[SNMP] No SNMP-capable devices found, waiting...", flush=True)
-                    await asyncio.sleep(SCAN_INTERVAL_SECONDS)
-                    continue
-                
-                print(f"[SNMP] Querying {len(snmp_devices)} SNMP devices", flush=True)
-                
-                for item in snmp_devices:
-                    if stop_event.is_set():
-                        break
-                    
-                    ip = item.get("ip_address")
-                    if not ip:
-                        continue
-                    
-                    result = await query_snmp(ip)
-                    if result:
-                        snmp_data, version = result
-                        await update_snmp_data(client, ip, snmp_data, version)
-                
-                elapsed = time.monotonic() - start_time
-                print(f"[SNMP] Discovery completed in {elapsed:.1f}s", flush=True)
-                
-                wait_time = max(1, SCAN_INTERVAL_SECONDS - int(elapsed))
-                await asyncio.sleep(wait_time)
-                
-            except Exception as e:
-                print(f"[SNMP] Discovery loop error: {e}", flush=True)
-                await asyncio.sleep(10)
+    print("[SNMP] Health check server started on port 9300", flush=True)
 
 
 async def main():
-    import signal
-    
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, stop_event.set)
-    
-    await asyncio.gather(
-        health_server(),
-        discovery_loop()
-    )
+    print(f"[SNMP] DISABLED - SNMP discovery service is disabled. Exiting.", flush=True)
+    return
 
 
 if __name__ == "__main__":

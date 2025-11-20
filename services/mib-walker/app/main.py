@@ -33,6 +33,35 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def normalize_mac_address(data: str) -> str:
+    """
+    Convert any MAC address format to standard aa:bb:cc:dd:ee:ff format.
+    Handles binary data, various delimiters, and LLDP chassis ID formats.
+    """
+    if not data:
+        return data
+    
+    try:
+        if isinstance(data, bytes):
+            byte_data = data
+        elif isinstance(data, str):
+            byte_data = data.encode('latin-1')
+        else:
+            return data
+        
+        if len(byte_data) == 6:
+            return ':'.join(f'{b:02x}' for b in byte_data)
+        elif len(byte_data) == 7 and byte_data[0] == 0x04:
+            return ':'.join(f'{b:02x}' for b in byte_data[1:])
+        
+        if isinstance(data, str) and any(c in data for c in [':', '-', '.']):
+            clean = data.replace(':', '').replace('-', '').replace('.', '')
+            if len(clean) == 12 and all(c in '0123456789abcdefABCDEF' for c in clean):
+                return ':'.join(clean[i:i+2].lower() for i in range(0, 12, 2))
+        
+        return data
+    except Exception:
+        return data
 
 
 def clean_snmp_data(data):
@@ -172,7 +201,16 @@ async def walk_oid_tree(ip: str, community: str, version: str, base_oid: str, mi
             
             for varBind in varBinds:
                 oid = str(varBind[0])
-                value = str(varBind[1])
+                raw_value = varBind[1]
+                try:
+                    if hasattr(raw_value, 'asNumbers'):
+                        value = bytes(raw_value.asNumbers()).decode('latin-1')
+                    elif hasattr(raw_value, 'prettyPrint'):
+                        value = raw_value.prettyPrint()
+                    else:
+                        value = str(raw_value)
+                except:
+                    value = str(raw_value)
                 
                 if not oid.startswith(base_oid):
                     snmpEngine.close_dispatcher()
@@ -301,7 +339,7 @@ async def walk_lldp_neighbors(ip: str, community: str, version: str) -> Dict[str
         lldp_loc_sysdesc = await get_single_oid(ip, community, version, "1.0.8802.1.1.2.1.3.4.0")
         
         if lldp_loc_chassis_id:
-            lldp_data["local_system"]["chassis_id"] = lldp_loc_chassis_id
+            lldp_data["local_system"]["chassis_id"] = normalize_mac_address(lldp_loc_chassis_id)
         if lldp_loc_sysname:
             lldp_data["local_system"]["sysname"] = lldp_loc_sysname
         if lldp_loc_sysdesc:
@@ -323,7 +361,8 @@ async def walk_lldp_neighbors(ip: str, community: str, version: str) -> Dict[str
                 key = f"{local_port}.{rem_index}"
                 if key not in neighbor_map:
                     neighbor_map[key] = {"local_port": local_port, "remote_index": rem_index}
-                neighbor_map[key]["remote_chassis_id"] = value
+                print(f"[DEBUG] Normalizing chassis ID: {repr(value)} -> {normalize_mac_address(value)}", flush=True)
+                neighbor_map[key]["remote_chassis_id"] = normalize_mac_address(value)
         
         for oid, value, _ in lldp_rem_port_id:
             parts = oid.split('.')
@@ -377,6 +416,94 @@ async def walk_lldp_neighbors(ip: str, community: str, version: str) -> Dict[str
         return lldp_data
 
 
+async def walk_stp_info(ip: str, community: str, version: str) -> Dict[str, Any]:
+    stp_data = {
+        "bridge_address": None,
+        "priority": None,
+        "designated_root": None,
+        "root_cost": None,
+        "root_port": None,
+        "ports": {}
+    }
+    
+    try:
+        bridge_addr = await get_single_oid(ip, community, version, "1.3.6.1.2.1.17.1.1.0")
+        if bridge_addr:
+            stp_data["bridge_address"] = bridge_addr
+        
+        priority = await get_single_oid(ip, community, version, "1.3.6.1.2.1.17.2.2.0")
+        if priority:
+            stp_data["priority"] = priority
+        
+        designated_root = await get_single_oid(ip, community, version, "1.3.6.1.2.1.17.2.5.0")
+        if designated_root:
+            stp_data["designated_root"] = designated_root
+        
+        root_cost = await get_single_oid(ip, community, version, "1.3.6.1.2.1.17.2.6.0")
+        if root_cost:
+            stp_data["root_cost"] = root_cost
+        
+        root_port = await get_single_oid(ip, community, version, "1.3.6.1.2.1.17.2.7.0")
+        if root_port:
+            stp_data["root_port"] = root_port
+        
+        port_states = await walk_oid_tree(ip, community, version, "1.3.6.1.2.1.17.2.15.1.3", max_results=100)
+        port_designated_roots = await walk_oid_tree(ip, community, version, "1.3.6.1.2.1.17.2.15.1.6", max_results=100)
+        port_designated_bridges = await walk_oid_tree(ip, community, version, "1.3.6.1.2.1.17.2.15.1.8", max_results=100)
+        
+        port_map = {}
+        
+        for oid, value, _ in port_states:
+            parts = oid.split('.')
+            if len(parts) >= 1:
+                port_idx = parts[-1]
+                if port_idx not in port_map:
+                    port_map[port_idx] = {"port": port_idx}
+                state_val = value
+                state_name = "unknown"
+                if state_val == "1":
+                    state_name = "disabled"
+                elif state_val == "2":
+                    state_name = "blocking"
+                elif state_val == "3":
+                    state_name = "listening"
+                elif state_val == "4":
+                    state_name = "learning"
+                elif state_val == "5":
+                    state_name = "forwarding"
+                elif state_val == "6":
+                    state_name = "broken"
+                port_map[port_idx]["state"] = state_name
+                port_map[port_idx]["state_value"] = state_val
+        
+        for oid, value, _ in port_designated_roots:
+            parts = oid.split('.')
+            if len(parts) >= 1:
+                port_idx = parts[-1]
+                if port_idx not in port_map:
+                    port_map[port_idx] = {"port": port_idx}
+                port_map[port_idx]["designated_root"] = value
+        
+        for oid, value, _ in port_designated_bridges:
+            parts = oid.split('.')
+            if len(parts) >= 1:
+                port_idx = parts[-1]
+                if port_idx not in port_map:
+                    port_map[port_idx] = {"port": port_idx}
+                port_map[port_idx]["designated_bridge"] = value
+        
+        stp_data["ports"] = port_map
+        
+        if port_map:
+            print(f"[MIB-WALKER] Found STP info for {len(port_map)} ports on {ip}", flush=True)
+        
+        return stp_data
+        
+    except Exception as e:
+        print(f"[MIB-WALKER] Error walking STP info for {ip}: {e}", flush=True)
+        return stp_data
+
+
 async def walk_device(client: httpx.AsyncClient, ip: str, community: str, version: str, mib_id: int, mib_name: str, oid_prefix: Optional[str] = None) -> Dict[str, Any]:
     print(f"[MIB-WALKER] Walking device {ip} with MIB {mib_name} (SNMP v{version})", flush=True)
     
@@ -400,10 +527,13 @@ async def walk_device(client: httpx.AsyncClient, ip: str, community: str, versio
             mib_data["storage"] = storage
             print(f"[MIB-WALKER] Found {len(storage)} storage entries on {ip}", flush=True)
         
-        if "LLDP" in mib_name.upper():
-            lldp_neighbors = await walk_lldp_neighbors(ip, community, version)
-            if lldp_neighbors and lldp_neighbors.get("neighbors"):
-                mib_data["lldp"] = lldp_neighbors
+        lldp_neighbors = await walk_lldp_neighbors(ip, community, version)
+        if lldp_neighbors and (lldp_neighbors.get("neighbors") or lldp_neighbors.get("local_system")):
+            mib_data["lldp"] = lldp_neighbors
+        
+        stp_info = await walk_stp_info(ip, community, version)
+        if stp_info and (stp_info.get("bridge_address") or stp_info.get("ports")):
+            mib_data["stp"] = stp_info
         
         if oid_prefix:
             mib_view = load_mib_for_resolution()
@@ -600,6 +730,7 @@ async def handle_walk_trigger(request):
             storage_combined = {}
             system_combined = {}
             lldp_data = None
+            stp_data = None
             
             for mib_id in mib_ids:
                 mib = mib_lookup.get(mib_id)
@@ -621,6 +752,8 @@ async def handle_walk_trigger(request):
                         system_combined.update(mib_data["system"])
                     if "lldp" in mib_data and not lldp_data:
                         lldp_data = mib_data["lldp"]
+                    if "stp" in mib_data and not stp_data:
+                        stp_data = mib_data["stp"]
             
             if interfaces_combined:
                 combined_data["interfaces"] = interfaces_combined
@@ -630,6 +763,8 @@ async def handle_walk_trigger(request):
                 combined_data["system"] = system_combined
             if lldp_data:
                 combined_data["lldp"] = lldp_data
+            if stp_data:
+                combined_data["stp"] = stp_data
             
             if not combined_data.get("mib_results"):
                 return web.json_response({"error": "MIB walk failed"}, status=500)
@@ -670,95 +805,9 @@ async def health_server():
 
 
 async def walker_loop():
-    print(f"[MIB-WALKER] Starting MIB walker (interval={WALK_INTERVAL_SECONDS}s)", flush=True)
-    
-    async with httpx.AsyncClient() as client:
-        while not stop_event.is_set():
-            try:
-                start_time = time.monotonic()
-                
-                devices = await fetch_devices_with_mibs(client)
-                
-                if not devices:
-                    print("[MIB-WALKER] No devices with MIBs assigned, waiting...", flush=True)
-                    await asyncio.sleep(WALK_INTERVAL_SECONDS)
-                    continue
-                
-                print(f"[MIB-WALKER] Walking {len(devices)} devices with MIBs", flush=True)
-                
-                for device in devices:
-                    if stop_event.is_set():
-                        break
-                    
-                    ip = device.get("ip_address")
-                    community = device.get("snmp_community", "public")
-                    version = device.get("snmp_version", "2c")
-                    mib_ids = device.get("mib_ids") or ([device.get("mib_id")] if device.get("mib_id") else [])
-                    
-                    if not ip or not mib_ids:
-                        continue
-                    
-                    try:
-                        mibs_resp = await client.get(f"{STATE_SERVER_URL}/api/mibs", timeout=10.0)
-                        if mibs_resp.status_code != 200:
-                            continue
-                            
-                        all_mibs = mibs_resp.json()
-                        mib_lookup = {m["id"]: m for m in all_mibs}
-                        
-                        combined_data = {
-                            "walked_at": now_iso(),
-                            "mib_results": {}
-                        }
-                        
-                        interfaces_combined = {}
-                        storage_combined = {}
-                        system_combined = {}
-                        
-                        for mib_id in mib_ids:
-                            mib = mib_lookup.get(mib_id)
-                            if not mib:
-                                continue
-                                
-                            mib_name = mib["name"]
-                            oid_prefix = mib.get("oid_prefix")
-                            
-                            mib_data = await walk_device(client, ip, community, version, mib_id, mib_name, oid_prefix)
-                            if mib_data:
-                                combined_data["mib_results"][mib_name] = mib_data
-                                
-                                if "interfaces" in mib_data:
-                                    interfaces_combined.update(mib_data["interfaces"])
-                                if "storage" in mib_data:
-                                    storage_combined.update(mib_data["storage"])
-                                if "system" in mib_data:
-                                    system_combined.update(mib_data["system"])
-                        
-                        if interfaces_combined:
-                            combined_data["interfaces"] = interfaces_combined
-                        if storage_combined:
-                            combined_data["storage"] = storage_combined
-                        if system_combined:
-                            combined_data["system"] = system_combined
-                        
-                        if combined_data.get("mib_results"):
-                            print(f"[MIB-WALKER] Walked {len(mib_ids)} MIBs for {ip}", flush=True)
-                            await update_device_mib_data(client, ip, combined_data)
-                            
-                    except Exception as e:
-                        print(f"[MIB-WALKER] Error walking {ip}: {e}", flush=True)
-                    
-                    await asyncio.sleep(1)
-                
-                elapsed = time.monotonic() - start_time
-                print(f"[MIB-WALKER] Walk completed in {elapsed:.1f}s", flush=True)
-                
-                wait_time = max(60, WALK_INTERVAL_SECONDS - int(elapsed))
-                await asyncio.sleep(wait_time)
-                
-            except Exception as e:
-                print(f"[MIB-WALKER] Walker loop error: {e}", flush=True)
-                await asyncio.sleep(60)
+    print("[MIB-WALKER] DISABLED - MIB walker service is disabled. Exiting.", flush=True)
+    stop_event.set()
+    return
 
 
 async def main():

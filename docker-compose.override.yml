@@ -1,0 +1,13 @@
+# CPU-only mode - disables GPU-dependent services
+services:
+  vllm:
+    deploy:
+      resources:
+        reservations: {}
+    profiles:
+      - disabled
+    
+  analyst:
+    profiles:
+      - disabled
+  

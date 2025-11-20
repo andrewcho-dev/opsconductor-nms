@@ -192,92 +192,9 @@ async def inventory_update_loop():
                 print(f"[INVENTORY] Update loop error: {e}", flush=True)
 
 async def tick_loop():
-    t = threading.Thread(target=sniff_worker, daemon=True)
-    t.start()
-
-    class FlowAgg(BaseModel):
-        packets: int = 0
-        bytes: int = 0
-        first_ts: str | None = None
-        last_ts: str | None = None
-
-    def flow_key(d: dict) -> str:
-        return json.dumps([d.get("src_ip"), d.get("dst_ip"), d.get("protocol"),
-                           d.get("src_port"), d.get("dst_port")], separators=(",", ":"))
-
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        last_flush = time.monotonic()
-        flows: Dict[str, dict] = {}
-        arps: list[dict] = []
-
-        while not stop_event.is_set():
-            try:
-                kind, data = pkt_q.get(timeout=0.01)
-                if kind == "arp":
-                    if len(arps) < MAX_EVIDENCE_ITEMS: arps.append(data)
-                else:
-                    k = flow_key(data)
-                    agg = flows.get(k)
-                    if not agg:
-                        agg = FlowAgg(packets=0, bytes=0, first_ts=data["timestamp"], last_ts=data["timestamp"]).model_dump()
-                        flows[k] = agg
-                    agg["packets"] += 1
-                    agg["bytes"] += int(data.get("bytes", 0))
-                    agg["last_ts"] = data["timestamp"]
-            except queue.Empty:
-                pass
-
-            now = time.monotonic()
-            if (now - last_flush) * 1000.0 >= BATCH_MS:
-                window_id = now_iso()
-                flow_items = []
-                unique_src_ips = set()
-                for k, agg in list(flows.items()):
-                    sip, dip, protocol, sport, dport = json.loads(k)
-                    unique_src_ips.add(sip)
-                    flow_items.append({
-                        "timestamp": agg["last_ts"],
-                        "src_ip": sip, "dst_ip": dip,
-                        "src_port": sport, "dst_port": dport,
-                        "protocol": protocol,
-                        "packets": agg["packets"], "bytes": agg["bytes"]
-                    })
-                    if len(flow_items) >= MAX_EVIDENCE_ITEMS:
-                        break
-                print(f"[TICK] flows={len(flows)} arps={len(arps)} src_ips={sorted(unique_src_ips)}", flush=True)
-
-                seed_facts = {}
-                if SEED_GATEWAY_IP: seed_facts["gateway_ip"] = SEED_GATEWAY_IP
-                if SEED_FIREWALL_IP: seed_facts["firewall_ip"] = SEED_FIREWALL_IP
-
-                payload = {
-                    "evidence_window": {
-                        "window_id": window_id,
-                        "arp": arps[:MAX_EVIDENCE_ITEMS],
-                        "flows": flow_items
-                    },
-                    "hypothesis_digest": await fetch_digest(client),
-                    "seed_facts": seed_facts,
-                    "previous_rationales": []
-                }
-
-                try:
-                    resp = await client.post(ANALYST_URL, json=payload)
-                    if resp.status_code >= 300:
-                        raise RuntimeError(f"analyst {resp.status_code} {resp.text[:200]}")
-                except Exception as e:
-                    try:
-                        os.makedirs("/data/dlq", exist_ok=True)
-                        with open(f"/data/dlq/{window_id}.json", "w") as f:
-                            json.dump(payload, f)
-                    except Exception:
-                        pass
-
-                last_flush = now
-                flows.clear()
-                arps.clear()
-
-            await asyncio.sleep(0.001)
+    print("[PACKET-COLLECTOR] DISABLED - Packet collector service is disabled. Exiting.", flush=True)
+    stop_event.set()
+    return
 
 async def main():
     loop = asyncio.get_running_loop()

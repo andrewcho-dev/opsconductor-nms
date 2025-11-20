@@ -4,14 +4,23 @@ interface InventoryDevice {
   id: number;
   ip_address: string;
   mac_address: string | null;
+  hostname: string | null;
+  all_hostnames: string[] | null;
   status: string;
   device_type: string | null;
   device_name: string | null;
   network_role: string | null;
+  network_role_confirmed: boolean;
   vendor: string | null;
   model: string | null;
   open_ports: Record<string, any> | null;
   snmp_data: Record<string, any> | null;
+  os_name: string | null;
+  os_accuracy: string | null;
+  os_detection: any[] | null;
+  uptime_seconds: string | null;
+  host_scripts: any[] | null;
+  nmap_scan_time: string | null;
   snmp_enabled: boolean;
   snmp_port: number;
   snmp_version: string | null;
@@ -138,6 +147,7 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
   const [sortField, setSortField] = useState<keyof InventoryDevice>("ip_address");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [filterType, setFilterType] = useState<string>("");
+  const [filterRole, setFilterRole] = useState<string>("");
   const [snmpModalDevice, setSnmpModalDevice] = useState<InventoryDevice | null>(null);
   const [snmpConfig, setSnmpConfig] = useState<SnmpConfig>({
     snmp_enabled: true,
@@ -150,7 +160,7 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
     snmp_priv_protocol: "",
     snmp_priv_key: "",
     mib_id: null,
-    network_role: "unknown",
+    network_role: "Endpoint",
   });
   const [suggestedMibs, setSuggestedMibs] = useState<Mib[]>([]);
   const [allMibs, setAllMibs] = useState<Mib[]>([]);
@@ -225,8 +235,20 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
     }
   };
 
+  const normalizeRole = (role: string | null): string => {
+    if (!role || role === "unknown") {
+      return "Endpoint";
+    } else if (role.includes("L3") || role === "L3_router") {
+      return "L3";
+    } else if (role.includes("L2") || role === "L2_switch") {
+      return "L2";
+    }
+    return role;
+  };
+
   const openSnmpModal = async (device: InventoryDevice) => {
     setSnmpModalDevice(device);
+    const normalizedRole = normalizeRole(device.network_role);
     setSnmpConfig({
       snmp_enabled: device.snmp_enabled || false,
       snmp_port: device.snmp_port || 161,
@@ -238,7 +260,7 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
       snmp_priv_protocol: device.snmp_priv_protocol || "",
       snmp_priv_key: device.snmp_priv_key || "",
       mib_id: device.mib_id || null,
-      network_role: device.network_role || "unknown",
+      network_role: normalizedRole,
     });
 
     try {
@@ -364,11 +386,20 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
     return sortOrder === "asc" ? comparison : -comparison;
   });
 
-  const filteredDevices = filterType
-    ? sortedDevices.filter((d) => d.device_type === filterType)
-    : sortedDevices;
+  const filteredDevices = sortedDevices.filter((d) => {
+    if (filterType && d.device_type !== filterType) return false;
+    if (filterRole) {
+      const deviceRole = normalizeRole(d.network_role);
+      if (deviceRole !== filterRole) return false;
+    }
+    return true;
+  });
 
   const deviceTypes = Array.from(new Set(devices.map((d) => d.device_type).filter((t) => t != null)));
+
+  const l3Count = devices.filter(d => normalizeRole(d.network_role) === "L3").length;
+  const l2Count = devices.filter(d => normalizeRole(d.network_role) === "L2").length;
+  const endpointCount = devices.filter(d => normalizeRole(d.network_role) === "Endpoint").length;
 
   if (loading) return <div className="inventory-loading">Loading inventory...</div>;
   if (error) return <div className="inventory-error">Error: {error}</div>;
@@ -377,8 +408,55 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
     <div className="inventory-container">
       <div className="inventory-header">
         <div className="inventory-filters">
-          <div style={{ fontWeight: "bold", marginRight: "1rem" }}>
-            Devices: {filteredDevices.length}{filterType ? ` (of ${devices.length} total)` : ""}
+          <div style={{ display: "flex", gap: "1rem", alignItems: "center", marginRight: "1rem" }}>
+            <span
+              onClick={() => setFilterRole("")}
+              style={{
+                fontWeight: "bold",
+                cursor: "pointer",
+                textDecoration: filterRole === "" ? "underline" : "none",
+                color: filterRole === "" ? "#2563eb" : "inherit"
+              }}
+              title="Show all devices"
+            >
+              Total: {devices.length}
+            </span>
+            <span
+              onClick={() => setFilterRole("L3")}
+              style={{
+                fontWeight: "bold",
+                cursor: "pointer",
+                textDecoration: filterRole === "L3" ? "underline" : "none",
+                color: filterRole === "L3" ? "#2563eb" : "#059669"
+              }}
+              title="Show L3 routers only"
+            >
+              L3: {l3Count}
+            </span>
+            <span
+              onClick={() => setFilterRole("L2")}
+              style={{
+                fontWeight: "bold",
+                cursor: "pointer",
+                textDecoration: filterRole === "L2" ? "underline" : "none",
+                color: filterRole === "L2" ? "#2563eb" : "#d97706"
+              }}
+              title="Show L2 switches only"
+            >
+              L2: {l2Count}
+            </span>
+            <span
+              onClick={() => setFilterRole("Endpoint")}
+              style={{
+                fontWeight: "bold",
+                cursor: "pointer",
+                textDecoration: filterRole === "Endpoint" ? "underline" : "none",
+                color: filterRole === "Endpoint" ? "#2563eb" : "#6b7280"
+              }}
+              title="Show endpoints only"
+            >
+              Ends: {endpointCount}
+            </span>
           </div>
           <label>
             Filter by type:
@@ -421,8 +499,8 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
               <th onClick={() => handleSort("vendor")} className="sortable">
                 Vendor {sortField === "vendor" ? (sortOrder === "asc" ? "▲" : "▼") : ""}
               </th>
-              <th>Services</th>
               <th>SNMP</th>
+              <th>Services</th>
               <th onClick={() => handleSort("confidence_score")} className="sortable">
                 Conf {sortField === "confidence_score" ? (sortOrder === "asc" ? "▲" : "▼") : ""}
               </th>
@@ -442,14 +520,52 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
                   </span>
                 </td>
                 <td className="type-cell">
-                  <span 
-                    className={`type-badge ${device.network_role || "unknown"}`}
-                    onClick={() => openSnmpModal(device)}
-                    style={{ cursor: 'pointer' }}
-                    title="Click to configure SNMP and network role"
-                  >
-                    {device.network_role === "L2_switch" ? "L2" : device.network_role === "L3_router" ? "L3" : device.network_role || "?"}
-                  </span>
+                  <div style={{ display: "flex", gap: "0.25rem", alignItems: "center", flexWrap: "nowrap" }}>
+                    {["L3", "L2", "End"].map((role) => {
+                      const roleValue = role === "End" ? "Endpoint" : role;
+                      const normalizedRole = normalizeRole(device.network_role);
+                      const isChecked = normalizedRole === roleValue;
+                      const isAutoDetected = isChecked && !device.network_role_confirmed;
+                      
+                      return (
+                        <label key={role} style={{ 
+                          display: "flex", 
+                          alignItems: "center", 
+                          cursor: "pointer", 
+                          gap: "0.25rem", 
+                          position: "relative",
+                          padding: "0.2rem 0.4rem",
+                          borderRadius: "0.25rem",
+                          backgroundColor: isAutoDetected ? "#fef3c7" : "transparent",
+                          border: isAutoDetected ? "1px solid #fcd34d" : "none"
+                        }}>
+                          <input
+                            type="radio"
+                            name={`role-${device.id}`}
+                            value={roleValue}
+                            checked={isChecked}
+                            onChange={(e) => {
+                              const updatedDevice = { ...device, network_role: e.target.value, network_role_confirmed: true };
+                              setDevices(devices.map(d => d.id === device.id ? updatedDevice : d));
+                              fetch(`${apiBase}/api/inventory/${device.ip_address}`, {
+                                method: "PUT",
+                                headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({
+                                  network_role: e.target.value,
+                                  network_role_confirmed: true
+                                }),
+                              });
+                            }}
+                            style={{ cursor: "pointer" }}
+                          />
+                          <span className={`text-sm ${isAutoDetected ? "font-bold" : "font-normal"}`} style={{ color: isAutoDetected ? "#92400e" : "inherit" }}>
+                            {role}
+                            {isAutoDetected && <span className="text-xs" style={{ marginLeft: "0.25rem", color: "#f59e0b", fontWeight: "bold" }}>*</span>}
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
                 </td>
                 <td className="vendor-cell">{device.vendor || "-"}</td>
                 <td className="snmp-cell">
@@ -544,84 +660,12 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
                   </label>
 
                   <label>
-                    <span>SNMP Port</span>
+                    <span>Port</span>
                     <input
                       type="number"
                       value={snmpConfig.snmp_port}
-                      onChange={(e) => setSnmpConfig({ ...snmpConfig, snmp_port: parseInt(e.target.value) || 161 })}
+                      onChange={(e) => setSnmpConfig({ ...snmpConfig, snmp_port: parseInt(e.target.value) })}
                     />
-                  </label>
-
-                  <label>
-                    <span>Primary MIB</span>
-                    <select
-                      value={snmpConfig.mib_id || ""}
-                      onChange={(e) => setSnmpConfig({ ...snmpConfig, mib_id: e.target.value ? parseInt(e.target.value) : null })}
-                    >
-                      <option value="">None</option>
-                      {suggestedMibs.length > 0 && (
-                        <optgroup label="Suggested MIBs">
-                          {suggestedMibs.map((mib) => (
-                            <option key={mib.id} value={mib.id}>
-                              {mib.name} ({mib.vendor})
-                            </option>
-                          ))}
-                        </optgroup>
-                      )}
-                      {allMibs.filter(m => !suggestedMibs.find(s => s.id === m.id)).length > 0 && (
-                        <optgroup label="All MIBs">
-                          {allMibs
-                            .filter(m => !suggestedMibs.find(s => s.id === m.id))
-                            .map((mib) => (
-                              <option key={mib.id} value={mib.id}>
-                                {mib.name} ({mib.vendor})
-                              </option>
-                            ))}
-                        </optgroup>
-                      )}
-                    </select>
-                  </label>
-
-                  {snmpModalDevice.mib_ids && snmpModalDevice.mib_ids.length > 0 && (
-                    <div style={{ marginTop: "0.5rem", padding: "0.75rem", background: "#f3f4f6", borderRadius: "0.375rem" }}>
-                      <strong style={{ fontSize: "0.875rem", color: "#374151", display: "block", marginBottom: "0.5rem" }}>
-                        Assigned MIBs ({snmpModalDevice.mib_ids.length}):
-                      </strong>
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.375rem" }}>
-                        {snmpModalDevice.mib_ids.map((mibId) => {
-                          const mib = allMibs.find(m => m.id === mibId);
-                          const isPrimary = mibId === snmpModalDevice.mib_id;
-                          return mib ? (
-                            <span 
-                              key={mibId} 
-                              style={{ 
-                                fontSize: "0.75rem", 
-                                padding: "0.25rem 0.5rem", 
-                                background: isPrimary ? "#3b82f6" : "#6b7280",
-                                color: "white",
-                                borderRadius: "0.25rem",
-                                fontWeight: isPrimary ? "600" : "400"
-                              }}
-                              title={`${mib.name} (${mib.vendor})${isPrimary ? ' - Primary' : ''}`}
-                            >
-                              {mib.name}
-                            </span>
-                          ) : null;
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  <label>
-                    <span>Network Role</span>
-                    <select
-                      value={snmpConfig.network_role}
-                      onChange={(e) => setSnmpConfig({ ...snmpConfig, network_role: e.target.value })}
-                    >
-                      <option value="unknown">Unknown</option>
-                      <option value="L2_switch">L2 Switch</option>
-                      <option value="L3_router">L3 Router</option>
-                    </select>
                   </label>
 
                   {(snmpConfig.snmp_version === "1" || snmpConfig.snmp_version === "2c") && (
@@ -631,7 +675,6 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
                         type="text"
                         value={snmpConfig.snmp_community}
                         onChange={(e) => setSnmpConfig({ ...snmpConfig, snmp_community: e.target.value })}
-                        placeholder="public"
                       />
                     </label>
                   )}
@@ -646,7 +689,6 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
                           onChange={(e) => setSnmpConfig({ ...snmpConfig, snmp_username: e.target.value })}
                         />
                       </label>
-
                       <label>
                         <span>Auth Protocol</span>
                         <select
@@ -658,7 +700,6 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
                           <option value="SHA">SHA</option>
                         </select>
                       </label>
-
                       {snmpConfig.snmp_auth_protocol && (
                         <label>
                           <span>Auth Key</span>
@@ -669,9 +710,8 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
                           />
                         </label>
                       )}
-
                       <label>
-                        <span>Privacy Protocol</span>
+                        <span>Priv Protocol</span>
                         <select
                           value={snmpConfig.snmp_priv_protocol}
                           onChange={(e) => setSnmpConfig({ ...snmpConfig, snmp_priv_protocol: e.target.value })}
@@ -681,10 +721,9 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
                           <option value="AES">AES</option>
                         </select>
                       </label>
-
                       {snmpConfig.snmp_priv_protocol && (
                         <label>
-                          <span>Privacy Key</span>
+                          <span>Priv Key</span>
                           <input
                             type="password"
                             value={snmpConfig.snmp_priv_key}
@@ -694,216 +733,140 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
                       )}
                     </>
                   )}
+
+                  <label>
+                    <span>Network Role</span>
+                    <select
+                      value={snmpConfig.network_role}
+                      onChange={(e) => setSnmpConfig({ ...snmpConfig, network_role: e.target.value })}
+                    >
+                      <option value="L3">L3 (Router)</option>
+                      <option value="L2">L2 (Switch)</option>
+                      <option value="Endpoint">Endpoint</option>
+                    </select>
+                  </label>
+
+                  <label>
+                    <span>MIB</span>
+                    <select
+                      value={snmpConfig.mib_id || ""}
+                      onChange={(e) => setSnmpConfig({ ...snmpConfig, mib_id: e.target.value ? parseInt(e.target.value) : null })}
+                    >
+                      <option value="">Auto-detect</option>
+                      {suggestedMibs.length > 0 && <optgroup label="Suggested">
+                        {suggestedMibs.map((mib) => (
+                          <option key={mib.id} value={mib.id}>
+                            {mib.name} ({mib.vendor})
+                          </option>
+                        ))}
+                      </optgroup>}
+                      {allMibs.length > 0 && <optgroup label="All MIBs">
+                        {allMibs.map((mib) => (
+                          <option key={mib.id} value={mib.id}>
+                            {mib.name} ({mib.vendor})
+                          </option>
+                        ))}
+                      </optgroup>}
+                    </select>
+                  </label>
+
+                  <div style={{ display: "flex", gap: "0.5rem", marginTop: "1rem" }}>
+                    <button onClick={saveSnmpConfig} disabled={saving} className="save-btn">
+                      {saving ? "Saving..." : "Save"}
+                    </button>
+                    <button onClick={handleReassignMib} disabled={saving} className="action-btn">
+                      Reassign MIB
+                    </button>
+                    <button onClick={handleWalkMib} disabled={saving} className="action-btn">
+                      Walk MIB
+                    </button>
+                  </div>
                 </div>
               </div>
-              <div style={{ flex: "1", overflowY: "auto", paddingLeft: "0.5rem" }}>
-                <h4 style={{ marginTop: 0 }}>MIB Data</h4>
-                {snmpModalDevice.snmp_data && (
+
+              <div style={{ flex: 1, overflowY: "auto" }}>
+                {snmpModalDevice.os_name && (
                   <>
-                    <div className="snmp-section">
-                      <h5>Basic Information</h5>
-                      <div className="snmp-details">
-                        {Object.entries(snmpModalDevice.snmp_data)
-                          .filter(([key]) => !["interfaces", "storage", "system", "walked_at", "mib_used", "mib_results", "VENDOR_MIB_DATA"].includes(key))
-                          .map(([key, value]) => (
-                            <div key={key} className="snmp-detail-row">
-                              <strong className="snmp-key">{key}:</strong>
-                              <span className="snmp-value">{String(value)}</span>
-                            </div>
-                          ))}
+                    <h4>OS Detection (Nmap)</h4>
+                    <div className="snmp-data-display" style={{ marginBottom: "1.5rem", padding: "1rem", backgroundColor: "#f9fafb", borderRadius: "0.5rem" }}>
+                      <div style={{ marginBottom: "0.5rem" }}>
+                        <strong>OS:</strong> {snmpModalDevice.os_name}
+                        {snmpModalDevice.os_accuracy && <span style={{ marginLeft: "0.5rem", color: "#10b981", fontWeight: "600" }}>({snmpModalDevice.os_accuracy}% accuracy)</span>}
                       </div>
-                    </div>
-
-                    {snmpModalDevice.snmp_data.interfaces && (
-                      <div className="snmp-section">
-                        <h5>Network Interfaces ({Object.keys(snmpModalDevice.snmp_data.interfaces).length})</h5>
-                        <div style={{ overflowX: "auto" }}>
-                          <table className="snmp-table">
-                            <thead>
-                              <tr>
-                                <th>Index</th>
-                                <th>Description</th>
-                                <th>Type</th>
-                                <th>Speed</th>
-                                <th>Admin</th>
-                                <th>Oper</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {Object.entries(snmpModalDevice.snmp_data.interfaces as Record<string, any>).map(([idx, iface]) => (
-                                <tr key={idx}>
-                                  <td>{idx}</td>
-                                  <td>{iface.description}</td>
-                                  <td>{iface.type}</td>
-                                  <td>{parseInt(iface.speed) >= 1000000000 ? `${parseInt(iface.speed) / 1000000000} Gbps` : parseInt(iface.speed) >= 1000000 ? `${parseInt(iface.speed) / 1000000} Mbps` : `${iface.speed} bps`}</td>
-                                  <td>{iface.admin_status === "1" ? "Up" : "Down"}</td>
-                                  <td>{iface.oper_status === "1" ? "Up" : "Down"}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
+                      {snmpModalDevice.uptime_seconds && (
+                        <div style={{ marginBottom: "0.5rem" }}>
+                          <strong>Uptime:</strong> {Math.floor(parseInt(snmpModalDevice.uptime_seconds) / 86400)} days
                         </div>
-                      </div>
-                    )}
-
-                    {snmpModalDevice.snmp_data.storage && (
-                      <div className="snmp-section">
-                        <h5>Storage ({Object.keys(snmpModalDevice.snmp_data.storage).length})</h5>
-                        <div style={{ overflowX: "auto" }}>
-                          <table className="snmp-table">
-                            <thead>
-                              <tr>
-                                <th>Index</th>
-                                <th>Description</th>
-                                <th>Units</th>
-                                <th>Size</th>
-                                <th>Used</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {Object.entries(snmpModalDevice.snmp_data.storage as Record<string, any>).map(([idx, store]) => {
-                                const units = parseInt(store.units) || 1;
-                                const size = parseInt(store.size) || 0;
-                                const used = parseInt(store.used) || 0;
-                                const sizeBytes = size * units;
-                                const usedBytes = used * units;
-                                const formatBytes = (bytes: number) => {
-                                  if (bytes >= 1073741824) return `${(bytes / 1073741824).toFixed(2)} GB`;
-                                  if (bytes >= 1048576) return `${(bytes / 1048576).toFixed(2)} MB`;
-                                  if (bytes >= 1024) return `${(bytes / 1024).toFixed(2)} KB`;
-                                  return `${bytes} B`;
-                                };
-                                return (
-                                  <tr key={idx}>
-                                    <td>{idx}</td>
-                                    <td>{store.description}</td>
-                                    <td>{units} bytes</td>
-                                    <td>{formatBytes(sizeBytes)}</td>
-                                    <td>{formatBytes(usedBytes)}</td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
+                      )}
+                      {snmpModalDevice.nmap_scan_time && (
+                        <div style={{ marginBottom: "0.5rem", fontSize: "0.85rem", color: "#6b7280" }}>
+                          <strong>Last Scan:</strong> {new Date(snmpModalDevice.nmap_scan_time).toLocaleString()}
                         </div>
-                      </div>
-                    )}
-
-                    {snmpModalDevice.snmp_data.system && (
-                      <div className="snmp-section">
-                        <h5>System Information</h5>
-                        <div className="snmp-details">
-                          {Object.entries(snmpModalDevice.snmp_data.system as Record<string, any>).map(([key, value]) => (
-                            <div key={key} className="snmp-detail-row">
-                              <strong className="snmp-key">{key}:</strong>
-                              <span className="snmp-value">{String(value)}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {snmpModalDevice.snmp_data.VENDOR_MIB_DATA && (
-                      <div className="snmp-section">
-                        <h5>Vendor-Specific MIB Data ({Object.keys(snmpModalDevice.snmp_data.VENDOR_MIB_DATA).length} OIDs)</h5>
-                        <div style={{ overflowX: "auto", maxHeight: "400px", overflowY: "auto" }}>
-                          <table className="snmp-table">
-                            <thead>
-                              <tr>
-                                <th>OID</th>
-                                <th>Value</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {Object.entries(snmpModalDevice.snmp_data.VENDOR_MIB_DATA as Record<string, any>).map(([label, data]) => {
-                                const isNewFormat = typeof data === 'object' && data !== null && 'oid' in data && 'value' in data;
-                                const oidValue = isNewFormat ? data.oid : label;
-                                const displayValue = isNewFormat ? data.value : data;
-                                const displayLabel = label;
-                                
-                                return (
-                                  <tr key={oidValue}>
-                                    <td style={{ fontFamily: "monospace" }} title={oidValue}>{displayLabel}</td>
-                                    <td>{String(displayValue)}</td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    )}
-
-                    {snmpModalDevice.snmp_data.mib_results && (
-                      <div className="snmp-section">
-                        <h5>Per-MIB Results</h5>
-                        {Object.entries(snmpModalDevice.snmp_data.mib_results as Record<string, any>).map(([mibName, mibData]) => (
-                          <div key={mibName} style={{ marginBottom: "1rem", padding: "0.75rem", background: "#f9fafb", borderRadius: "0.375rem", border: "1px solid #e5e7eb" }}>
-                            <strong style={{ fontSize: "0.9rem", color: "#111827", display: "block", marginBottom: "0.5rem" }}>
-                              {mibName}
-                            </strong>
-                            {typeof mibData === 'object' && mibData !== null ? (
-                              <div style={{ overflowX: "auto", maxHeight: "300px", overflowY: "auto" }}>
-                                <table className="snmp-table" style={{ fontSize: "0.875rem" }}>
-                                  <thead>
-                                    <tr>
-                                      <th>Key</th>
-                                      <th>Value</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {Object.entries(mibData).map(([key, value]) => (
-                                      <tr key={key}>
-                                        <td style={{ fontFamily: "monospace", fontSize: "0.8rem" }}>{key}</td>
-                                        <td>{renderComplexValue(value, 1)}</td>
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            ) : (
-                              <span style={{ fontSize: "0.875rem", color: "#6b7280" }}>No data available</span>
-                            )}
+                      )}
+                      {snmpModalDevice.os_detection && snmpModalDevice.os_detection.length > 0 && (
+                        <details style={{ marginTop: "1rem" }}>
+                          <summary style={{ cursor: "pointer", fontWeight: "600", color: "#374151" }}>All OS Matches ({snmpModalDevice.os_detection.length})</summary>
+                          <div style={{ paddingLeft: "1rem", marginTop: "0.5rem" }}>
+                            {renderComplexValue(snmpModalDevice.os_detection)}
                           </div>
-                        ))}
-                      </div>
-                    )}
-
-                    {snmpModalDevice.snmp_data.mib_used && (
-                      <div className="snmp-section" style={{ color: "#666", marginTop: "0.5rem" }}>
-                        MIB: {snmpModalDevice.snmp_data.mib_used} | Last walked: {snmpModalDevice.snmp_data.walked_at ? new Date(snmpModalDevice.snmp_data.walked_at as string).toLocaleString() : "Never"}
-                      </div>
-                    )}
+                        </details>
+                      )}
+                    </div>
                   </>
                 )}
-              </div>
-            </div>
-            <div className="modal-footer">
-              <div style={{ display: "flex", gap: "0.5rem", flex: 1 }}>
-                <button 
-                  className="modal-btn modal-btn-secondary" 
-                  onClick={handleReassignMib} 
-                  disabled={saving || !snmpModalDevice.snmp_data}
-                  title="Re-suggest and assign the best MIB for this device"
-                >
-                  Reassign MIB
-                </button>
-                <button 
-                  className="modal-btn modal-btn-secondary" 
-                  onClick={handleWalkMib} 
-                  disabled={saving || !snmpModalDevice.mib_id || !snmpModalDevice.snmp_enabled}
-                  title="Trigger an immediate SNMP walk for this device"
-                >
-                  Walk MIB Now
-                </button>
-              </div>
-              <div style={{ display: "flex", gap: "0.5rem" }}>
-                <button className="modal-btn modal-btn-secondary" onClick={() => setSnmpModalDevice(null)}>
-                  Cancel
-                </button>
-                <button className="modal-btn" onClick={saveSnmpConfig} disabled={saving}>
-                  {saving ? "Saving..." : "Save Configuration"}
-                </button>
+                
+                {snmpModalDevice.host_scripts && snmpModalDevice.host_scripts.length > 0 && (
+                  <>
+                    <h4>NSE Script Results</h4>
+                    <div className="snmp-data-display" style={{ marginBottom: "1.5rem" }}>
+                      {snmpModalDevice.host_scripts.map((script: any, idx: number) => (
+                        <details key={idx} style={{ marginBottom: "1rem", padding: "0.75rem", backgroundColor: "#fffbeb", borderRadius: "0.5rem", border: "1px solid #fbbf24" }}>
+                          <summary style={{ cursor: "pointer", fontWeight: "600", color: "#92400e" }}>
+                            {script.id}
+                          </summary>
+                          <pre style={{ marginTop: "0.5rem", padding: "0.5rem", backgroundColor: "white", borderRadius: "0.25rem", fontSize: "0.85rem", overflow: "auto", maxHeight: "300px" }}>
+                            {script.output}
+                          </pre>
+                        </details>
+                      ))}
+                    </div>
+                  </>
+                )}
+                
+                {snmpModalDevice.open_ports && Object.keys(snmpModalDevice.open_ports).some(port => snmpModalDevice.open_ports![port].scripts) && (
+                  <>
+                    <h4>Port-Specific Scripts</h4>
+                    <div className="snmp-data-display" style={{ marginBottom: "1.5rem" }}>
+                      {Object.entries(snmpModalDevice.open_ports).map(([port, portInfo]: [string, any]) => {
+                        if (!portInfo.scripts || portInfo.scripts.length === 0) return null;
+                        return (
+                          <div key={port} style={{ marginBottom: "1rem" }}>
+                            <h5 style={{ color: "#1f2937", marginBottom: "0.5rem" }}>Port {port} ({portInfo.service})</h5>
+                            {portInfo.scripts.map((script: any, idx: number) => (
+                              <details key={idx} style={{ marginBottom: "0.75rem", padding: "0.75rem", backgroundColor: "#fef3c7", borderRadius: "0.5rem" }}>
+                                <summary style={{ cursor: "pointer", fontWeight: "600", color: "#78350f" }}>
+                                  {script.id}
+                                </summary>
+                                <pre style={{ marginTop: "0.5rem", padding: "0.5rem", backgroundColor: "white", borderRadius: "0.25rem", fontSize: "0.85rem", overflow: "auto", maxHeight: "200px" }}>
+                                  {script.output}
+                                </pre>
+                              </details>
+                            ))}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+
+                <h4>SNMP Data</h4>
+                {snmpModalDevice.snmp_data ? (
+                  <div className="snmp-data-display">
+                    {renderComplexValue(snmpModalDevice.snmp_data)}
+                  </div>
+                ) : (
+                  <p style={{ color: "#9ca3af", fontStyle: "italic" }}>No SNMP data available</p>
+                )}
               </div>
             </div>
           </div>

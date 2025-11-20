@@ -1,6 +1,6 @@
 # OpsConductor NMS - Repository Overview
 
-**Last Updated**: 2025-11-14  
+**Last Updated**: 2025-11-19  
 **Status**: ✅ Production-Ready Network Management System
 
 ---
@@ -18,9 +18,11 @@ OpsConductor NMS is a comprehensive network management system that combines:
 
 1. **Discovers Network Devices**: Passively observes network traffic and actively scans IP ranges to discover all devices
 2. **Identifies Device Types**: Uses port scanning, SNMP queries, and LLM analysis to classify devices (routers, switches, hosts, etc.)
-3. **Enriches Device Information**: Automatically gathers vendor info (MAC OUI lookup), SNMP data, open ports, and service information
-4. **Manages MIB Library**: Maintains vendor-specific MIBs and automatically assigns appropriate MIBs to discovered devices
-5. **Provides Real-Time UI**: Web interface showing complete IP inventory with filtering, sorting, and device details
+3. **Discovers Layer 2 Topology**: Uses LLDP (Link Layer Discovery Protocol) to map physical network connections between devices
+4. **Classifies Network Roles**: Automatically determines L2/L3/Endpoint roles based on IP forwarding, routing tables, and STP status
+5. **Enriches Device Information**: Automatically gathers vendor info (MAC OUI lookup), SNMP data, open ports, and service information
+6. **Manages MIB Library**: Maintains vendor-specific MIBs and automatically assigns appropriate MIBs to discovered devices
+7. **Provides Real-Time UI**: Web interface showing complete IP inventory with filtering, sorting, device details, and topology visualization
 
 ---
 
@@ -98,16 +100,16 @@ OpsConductor NMS is a comprehensive network management system that combines:
 
 | Service | Purpose | Technology | Port | Status |
 |---------|---------|-----------|------|--------|
-| **vLLM** | LLM inference engine | vLLM + Phi-3-mini-4k | 8000 | ✅ Working |
+| **vLLM** | LLM inference engine | vLLM + Phi-3-mini-4k | 8000 | ⚙️ Optional (GPU) |
 | **State Server** | API + Database + WebSocket | FastAPI + PostgreSQL | 8080 | ✅ Working |
-| **LLM Analyst** | Topology + Classification | FastAPI + httpx | 8100 | ✅ Working |
+| **LLM Analyst** | Topology + Classification | FastAPI + httpx | 8100 | ⚙️ Optional (GPU) |
 | **Packet Collector** | Passive packet capture | Python + Scapy | 9100 (health) | ✅ Working |
 | **Port Scanner** | Active TCP/UDP scanning | Python asyncio | 9200 (health) | ✅ Working |
-| **SNMP Discovery** | SNMP querying | Python + pysnmp | 9300 (health) | ✅ Working |
+| **SNMP Discovery** | SNMP querying + network role classification | Python + pysnmp | 9300 (health) | ✅ Working |
 | **MAC Enricher** | Vendor identification | IEEE OUI lookup | 9400 (health) | ✅ Working |
 | **MIB Assigner** | Auto MIB assignment | Python | 9500 (health) | ✅ Working |
-| **MIB Walker** | SNMP data collection with OID resolution | Python + pysnmp + pysmi | 9600 (health) | ✅ Working |
-| **UI** | Web interface | React + TypeScript | 3000 | ✅ Working |
+| **MIB Walker** | SNMP data collection + LLDP discovery | Python + pysnmp + pysmi | 9600 (health) | ✅ Working |
+| **UI** | Web interface + topology visualization | React + TypeScript | 3000 | ✅ Working |
 | **PostgreSQL** | Database | PostgreSQL 16 | 5432 (internal) | ✅ Working |
 
 ---
@@ -120,9 +122,10 @@ OpsConductor NMS is a comprehensive network management system that combines:
 Complete device inventory with all discovered information:
 - IP address, MAC address, hostname
 - Device type, vendor, model
+- Network role (L2/L3/Endpoint) and confirmation status
 - Status (active/inactive/unknown)
 - Open ports (JSONB)
-- SNMP configuration and data (JSONB)
+- SNMP configuration and data (JSONB) including LLDP neighbor data
 - Confidence scores and classification notes
 - Timestamps (first_seen, last_seen, last_probed)
 
@@ -161,6 +164,7 @@ Audit log of all topology changes
 - `GET /api/inventory` - List all discovered IPs (supports filtering)
   - Query params: `status`, `device_type`, `confirmed`
 - `GET /api/inventory/{ip}` - Get single device details
+- `GET /api/inventory/{ip}/neighbors` - Get LLDP neighbors with port mappings
 - `POST /api/inventory` - Create/update device
 - `PUT /api/inventory/{ip}` - Update device
 - `POST /api/inventory/{ip}/confirm` - User confirmation
@@ -171,7 +175,11 @@ Audit log of all topology changes
 - `POST /api/mibs` - Upload new MIB
 - `DELETE /api/mibs/{id}` - Delete MIB
 - `GET /api/inventory/{ip}/mibs/suggestions` - Get MIB suggestions for device
-- `POST /api/inventory/{ip}/walk-mib` - Trigger manual MIB walk for device
+- `POST /api/inventory/{ip}/mibs/walk` - Trigger manual MIB walk for device
+- `POST /api/inventory/{ip}/mibs/reassign` - Reassign MIB for device
+
+#### Topology Management
+- `GET /api/topology/layer2` - Get Layer 2 topology with LLDP-discovered connections
 
 #### Seed Configuration
 - `GET /seed` - Get seed configuration
@@ -216,11 +224,12 @@ Audit log of all topology changes
 7. MIB WALKER
    ↓ Walks SNMP tree with assigned MIB
    ↓ Resolves numeric OIDs to text labels using PySNMP MibViewController
-   ↓ Loads standard MIBs from http://mibs.pysnmp.com
+   ↓ Loads standard MIBs (SNMPv2-MIB, IF-MIB, LLDP-MIB, etc.) from http://mibs.pysnmp.com
    ↓ Collects detailed metrics with human-readable labels
-   ↓ Updates snmp_data JSONB (vendor_mib_data field)
+   ↓ Discovers LLDP neighbors and port connections
+   ↓ Updates snmp_data JSONB (vendor_mib_data field, lldp field)
    ↓
-8. LLM ANALYST
+8. LLM ANALYST (Optional)
    ↓ Analyzes all collected data
    ↓ Classifies device_type with confidence_score
    ↓ Updates classification_notes
@@ -277,6 +286,7 @@ The MIB Walker service implements automatic OID resolution to convert numeric OI
    - Printer-MIB
    - BRIDGE-MIB
    - ENTITY-MIB
+   - LLDP-MIB
 4. **Resolution Process**:
    - Creates `MibBuilder` and `MibViewController` instances
    - Loads standard MIBs during initialization
@@ -293,6 +303,109 @@ The MIB Walker service implements automatic OID resolution to convert numeric OI
 - Network administrators can immediately understand what each metric represents
 - No need to manually look up OID meanings in MIB documentation
 - Works with standard MIBs out-of-the-box (Printer-MIB, IF-MIB, etc.)
+
+---
+
+### LLDP Neighbor Discovery
+
+The MIB Walker service automatically discovers Layer 2 physical topology using LLDP (Link Layer Discovery Protocol).
+
+**Technical Implementation**:
+
+1. **LLDP-MIB Queries**: Walks LLDP-MIB OID tree (1.0.8802.1.1.2) to discover neighbors
+2. **Local System Information**:
+   - `lldpLocChassisId` (1.0.8802.1.1.2.1.3.2.0): Local chassis ID
+   - `lldpLocSysName` (1.0.8802.1.1.2.1.3.3.0): Local system name
+   - `lldpLocSysDesc` (1.0.8802.1.1.2.1.3.4.0): Local system description
+3. **Remote Neighbor Information**:
+   - `lldpRemChassisId` (1.0.8802.1.1.2.1.4.1.1.5): Remote device chassis ID
+   - `lldpRemPortId` (1.0.8802.1.1.2.1.4.1.1.7): Remote port identifier
+   - `lldpRemPortDesc` (1.0.8802.1.1.2.1.4.1.1.8): Remote port description
+   - `lldpRemSysName` (1.0.8802.1.1.2.1.4.1.1.9): Remote system name
+   - `lldpRemSysDesc` (1.0.8802.1.1.2.1.4.1.1.10): Remote system description
+4. **Neighbor Resolution**: State server resolves remote chassis IDs and system names to IP addresses in inventory
+5. **Storage**: LLDP data stored in `snmp_data.lldp` JSONB field with `local_system` and `neighbors` arrays
+
+**Data Structure**:
+```json
+{
+  "lldp": {
+    "local_system": {
+      "chassis_id": "00:11:22:33:44:55",
+      "sysname": "switch-01",
+      "sysdesc": "Cisco IOS Switch"
+    },
+    "neighbors": [
+      {
+        "local_port": "1",
+        "remote_chassis_id": "00:aa:bb:cc:dd:ee",
+        "remote_port_id": "GigabitEthernet0/1",
+        "remote_sysname": "router-01",
+        "remote_sysdesc": "Cisco IOS Router"
+      }
+    ]
+  }
+}
+```
+
+**Layer 2 Topology API**: The state server provides `/api/topology/layer2` endpoint that:
+- Retrieves all devices with LLDP neighbor data
+- Resolves remote chassis IDs and system names to IP addresses
+- Returns nodes (devices) and edges (connections) for visualization
+- Includes port mapping information for each connection
+
+**Benefits**:
+- Automatic discovery of physical network topology
+- Visualize actual cable connections between devices
+- Identify incorrect cabling or missing connections
+- No manual topology mapping required
+
+---
+
+### Network Role Classification
+
+The SNMP Discovery service automatically classifies devices into network roles based on their capabilities.
+
+**Classification Logic**:
+
+1. **L3 (Layer 3 Router)**:
+   - `ipForwarding` (1.3.6.1.2.1.4.1.0) = 1 (forwarding enabled)
+   - AND route count > 2 (from ipRouteTable walk)
+   
+2. **L2 (Layer 2 Switch)**:
+   - STP enabled (dot1dStpProtocolSpecification exists)
+   - Does not meet L3 criteria
+
+3. **Endpoint**:
+   - Does not meet L2 or L3 criteria
+   - Typically hosts, servers, printers, cameras, etc.
+
+**Technical Implementation**:
+
+1. **SNMP Queries** (services/snmp-discovery/app/main.py):
+   - `ipForwarding` OID: Checks if IP forwarding is enabled
+   - `ipRouteTable` walk: Counts routing table entries
+   - `dot1dStpProtocolSpecification` OID: Checks if STP is enabled
+
+2. **Classification Function** (`determine_network_role()`):
+   ```python
+   if ipForwarding == "1" and route_count > 2:
+       return "L3"
+   elif stp_enabled > 0:
+       return "L2"
+   else:
+       return "Endpoint"
+   ```
+
+3. **Storage**: Network role stored in `ip_inventory.network_role` field with confirmation flag
+
+**User Confirmation**: Network roles can be manually confirmed via UI or API, preventing automatic reclassification.
+
+**Benefits**:
+- Automatically identifies network device types
+- Helps with inventory organization and filtering
+- Supports topology inference and visualization
+- Can be manually overridden when needed
 
 ---
 
@@ -334,6 +447,7 @@ MIB_ASSIGN_INTERVAL_SECONDS=600     # Assignment interval (10 min)
 MIB_WALK_INTERVAL_SECONDS=1800      # Walk interval (30 min)
 
 # UI
+SERVER_IP=192.168.10.50             # IP address of the server (used by UI)
 VITE_API_BASE=http://192.168.10.50:8080
 VITE_WS_BASE=ws://192.168.10.50:8080
 UI_WS_ORIGIN=*                      # CORS origin

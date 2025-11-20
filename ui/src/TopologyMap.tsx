@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from "react";
 import { Network } from "vis-network";
 import { DataSet } from "vis-data";
 
+type TopologyMode = "l3" | "l2" | "all";
+
 interface TopologyMapProps {
   apiBase: string;
   onBack: () => void;
@@ -16,6 +18,8 @@ interface Node {
   chassis_id: string | null;
   system_name: string | null;
   kind: string | null;
+  connected_subnets?: string[];
+  is_root_bridge?: boolean;
 }
 
 interface Edge {
@@ -25,11 +29,14 @@ interface Edge {
   local_port: string;
   remote_port: string;
   remote_port_desc?: string;
+  stp_state?: string;
 }
 
 interface TopologyData {
   nodes: Node[];
   edges: Edge[];
+  subnets?: { [key: string]: string[] };
+  root_bridge?: string | null;
 }
 
 interface NeighborInfo {
@@ -55,18 +62,31 @@ function TopologyMap({ apiBase, onBack }: TopologyMapProps) {
   const [topology, setTopology] = useState<TopologyData | null>(null);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [neighborInfo, setNeighborInfo] = useState<NeighborInfo | null>(null);
+  const [mode, setMode] = useState<TopologyMode>("l3");
   const networkContainer = useRef<HTMLDivElement>(null);
   const networkInstance = useRef<Network | null>(null);
 
   useEffect(() => {
     fetchTopology();
-  }, [apiBase]);
+  }, [apiBase, mode]);
 
   const fetchTopology = async () => {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch(`${apiBase}/api/topology/layer2`);
+      let endpoint = "";
+      switch (mode) {
+        case "l3":
+          endpoint = `${apiBase}/api/topology/l3`;
+          break;
+        case "l2":
+          endpoint = `${apiBase}/api/topology/l2`;
+          break;
+        case "all":
+          endpoint = `${apiBase}/api/topology/layer2`;
+          break;
+      }
+      const response = await fetch(endpoint);
       if (!response.ok) {
         throw new Error(`Failed to fetch topology: ${response.statusText}`);
       }
@@ -96,12 +116,22 @@ function TopologyMap({ apiBase, onBack }: TopologyMapProps) {
   useEffect(() => {
     if (!topology || !networkContainer.current) return;
 
-    const getDeviceTier = (network_role: string | null, kind: string | null) => {
-      const role = network_role || kind;
+    const getDeviceTier = (node: Node) => {
+      const role = node.network_role || node.kind;
       if (!role) return "endpoint";
       const lower = role.toLowerCase();
-      if (lower === "l3_router" || lower === "router" || lower === "gateway" || lower === "firewall") return "router";
-      if (lower === "l2_switch" || lower === "switch") return "switch";
+      
+      if (mode === "l3") {
+        return "router";
+      }
+      
+      if (mode === "l2") {
+        if (node.is_root_bridge) return "root_bridge";
+        return "switch";
+      }
+      
+      if (lower === "l3" || lower === "l3_router" || lower === "router" || lower === "gateway" || lower === "firewall") return "router";
+      if (lower === "l2" || lower === "l2_switch" || lower === "switch") return "switch";
       return "endpoint";
     };
 
@@ -109,7 +139,6 @@ function TopologyMap({ apiBase, onBack }: TopologyMapProps) {
       switch (tier) {
         case "router":
           return {
-            level: 0,
             shape: "diamond",
             size: 35,
             background: "#FF6B6B",
@@ -117,9 +146,17 @@ function TopologyMap({ apiBase, onBack }: TopologyMapProps) {
             fontSize: 14,
             bold: true
           };
+        case "root_bridge":
+          return {
+            shape: "star",
+            size: 40,
+            background: "#9C27B0",
+            border: "#6A1B9A",
+            fontSize: 14,
+            bold: true
+          };
         case "switch":
           return {
-            level: 1,
             shape: "circle",
             size: 30,
             background: "#4CAF50",
@@ -129,7 +166,6 @@ function TopologyMap({ apiBase, onBack }: TopologyMapProps) {
           };
         case "endpoint":
           return {
-            level: 2,
             shape: "box",
             size: 20,
             background: "#2196F3",
@@ -142,15 +178,31 @@ function TopologyMap({ apiBase, onBack }: TopologyMapProps) {
 
     const nodes = new DataSet(
       topology.nodes.map((node) => {
-        const tier = getDeviceTier(node.network_role, node.kind || node.device_type);
+        const tier = getDeviceTier(node);
         const config = getTierConfig(tier);
+        
+        let labelText = node.hostname || node.system_name || node.ip;
+        if (mode === "l3" && node.connected_subnets && node.connected_subnets.length > 0) {
+          labelText += `\n(${node.connected_subnets.length} subnets)`;
+        }
+        
+        let titleText = `${node.ip}\n${node.device_type || 'Unknown'}\nRole: ${node.network_role || 'Unknown'}\n${node.vendor || ''}`;
+        if (node.is_root_bridge) {
+          titleText += "\n⭐ Root Bridge";
+        }
+        if (node.connected_subnets && node.connected_subnets.length > 0) {
+          titleText += `\nConnected Subnets:\n${node.connected_subnets.slice(0, 5).join('\n')}`;
+          if (node.connected_subnets.length > 5) {
+            titleText += `\n... and ${node.connected_subnets.length - 5} more`;
+          }
+        }
+        
         return {
           id: node.ip,
-          label: node.hostname || node.system_name || node.ip,
-          title: `${node.ip}\n${node.device_type || 'Unknown'}\nRole: ${node.network_role || 'Unknown'}\n${node.vendor || ''}`,
+          label: labelText,
+          title: titleText,
           shape: config!.shape,
           size: config!.size,
-          level: config!.level,
           color: {
             background: config!.background,
             border: config!.border,
@@ -162,40 +214,59 @@ function TopologyMap({ apiBase, onBack }: TopologyMapProps) {
           font: {
             color: "#ffffff",
             size: config!.fontSize,
-            bold: config!.bold
+            bold: config!.bold,
+            multi: "html"
           }
         };
       })
     );
 
     const edges = new DataSet(
-      topology.edges.map((edge, idx) => ({
-        id: `edge-${idx}`,
-        from: edge.from,
-        to: edge.to,
-        label: edge.label || "",
-        color: {
-          color: "#666666",
-          highlight: "#FFC107"
-        },
-        width: 2,
-        smooth: {
-          type: "continuous"
+      topology.edges.map((edge, idx) => {
+        let edgeColor = "#666666";
+        let edgeWidth = 2;
+        
+        if (mode === "l2" && edge.stp_state) {
+          switch (edge.stp_state) {
+            case "forwarding":
+              edgeColor = "#4CAF50";
+              edgeWidth = 3;
+              break;
+            case "blocking":
+              edgeColor = "#F44336";
+              edgeWidth = 1;
+              break;
+            case "learning":
+            case "listening":
+              edgeColor = "#FF9800";
+              edgeWidth = 2;
+              break;
+            default:
+              edgeColor = "#9E9E9E";
+              break;
+          }
         }
-      }))
+        
+        return {
+          id: `edge-${idx}`,
+          from: edge.from,
+          to: edge.to,
+          label: edge.label || "",
+          color: {
+            color: edgeColor,
+            highlight: "#FFC107"
+          },
+          width: edgeWidth,
+          smooth: {
+            type: "continuous"
+          }
+        };
+      })
     );
 
     const options = {
       layout: {
-        hierarchical: {
-          enabled: true,
-          direction: "UD",
-          sortMethod: "directed",
-          levelSeparation: 300,
-          nodeSpacing: 150,
-          blockShifting: true,
-          edgeMinimization: true
-        }
+        randomSeed: 42
       },
       nodes: {
         borderWidth: 2,
@@ -227,7 +298,21 @@ function TopologyMap({ apiBase, onBack }: TopologyMapProps) {
         }
       },
       physics: {
-        enabled: false
+        enabled: true,
+        stabilization: {
+          enabled: true,
+          iterations: 1000,
+          fit: true
+        },
+        barnesHut: {
+          gravitationalConstant: -8000,
+          centralGravity: 0.3,
+          springLength: 200,
+          springConstant: 0.04,
+          damping: 0.09,
+          avoidOverlap: 0.5
+        },
+        solver: "barnesHut"
       },
       interaction: {
         hover: true,
@@ -261,12 +346,46 @@ function TopologyMap({ apiBase, onBack }: TopologyMapProps) {
         networkInstance.current.destroy();
       }
     };
-  }, [topology]);
+  }, [topology, mode]);
+
+  const getModeTitle = () => {
+    switch (mode) {
+      case "l3":
+        return "Layer 3 Network Topology";
+      case "l2":
+        return "Layer 2 Network Topology (STP)";
+      case "all":
+        return "Full Network Topology";
+    }
+  };
 
   return (
     <div className="topology-container">
       <div className="topology-header">
-        <h1>Layer 2 Network Topology</h1>
+        <h1>{getModeTitle()}</h1>
+        <div className="topology-mode-selector">
+          <button 
+            className={mode === "l3" ? "active" : ""}
+            onClick={() => setMode("l3")}
+            disabled={loading}
+          >
+            L3 Topology
+          </button>
+          <button 
+            className={mode === "l2" ? "active" : ""}
+            onClick={() => setMode("l2")}
+            disabled={loading}
+          >
+            L2 Topology
+          </button>
+          <button 
+            className={mode === "all" ? "active" : ""}
+            onClick={() => setMode("all")}
+            disabled={loading}
+          >
+            All Devices
+          </button>
+        </div>
         <div className="topology-actions">
           <button onClick={fetchTopology} disabled={loading}>
             {loading ? "Loading..." : "Refresh"}

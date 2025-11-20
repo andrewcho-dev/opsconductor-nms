@@ -140,6 +140,7 @@ async def get_inventory_item(ip_address: str, session: AsyncSession = Depends(ge
 async def get_layer2_topology(session: AsyncSession = Depends(get_session)):
     from sqlalchemy import select
     from .models import IpInventory, GraphState
+    from .stp_calculator import STPTopologyCalculator
     
     result = await session.execute(select(IpInventory))
     all_devices = result.scalars().all()
@@ -152,7 +153,7 @@ async def get_layer2_topology(session: AsyncSession = Depends(get_session)):
         if isinstance(graph_nodes, dict):
             graph_nodes_map = graph_nodes
     
-    nodes = []
+    nodes_dict = {}
     edges = []
     seen_edges = set()
     
@@ -166,7 +167,18 @@ async def get_layer2_topology(session: AsyncSession = Depends(get_session)):
                 if isinstance(graph_node, dict):
                     node_kind = graph_node.get("kind", "unknown")
         
-        nodes.append({
+        snmp_data = device.snmp_data or {}
+        stp_data = snmp_data.get("stp", {})
+        
+        bridge_addr = stp_data.get("bridge_address")
+        designated_root = stp_data.get("designated_root")
+        root_cost = stp_data.get("root_cost", "")
+        
+        is_root = False
+        if bridge_addr and designated_root:
+            is_root = (bridge_addr == designated_root) or (root_cost == "0")
+        
+        nodes_dict[device_ip] = {
             "id": device_ip,
             "label": device.device_name or device_ip,
             "ip": device_ip,
@@ -175,8 +187,12 @@ async def get_layer2_topology(session: AsyncSession = Depends(get_session)):
             "network_role": device.network_role,
             "kind": node_kind,
             "vendor": device.vendor,
-            "model": device.model
-        })
+            "model": device.model,
+            "is_root_bridge": is_root,
+            "bridge_address": bridge_addr,
+            "designated_root": designated_root,
+            "root_cost": root_cost
+        }
         
         snmp_data = device.snmp_data or {}
         lldp_data = snmp_data.get("lldp", {})
@@ -213,6 +229,13 @@ async def get_layer2_topology(session: AsyncSession = Depends(get_session)):
                     source_ip = str(device.ip_address)
                     target_ip = str(remote_device.ip_address)
                     
+                    local_port = neighbor.get("local_port", "")
+                    port_state = "unknown"
+                    
+                    stp_ports = stp_data.get("ports", {})
+                    if local_port in stp_ports:
+                        port_state = stp_ports[local_port].get("state", "unknown")
+                    
                     edge_key = tuple(sorted([source_ip, target_ip]))
                     if edge_key not in seen_edges:
                         seen_edges.add(edge_key)
@@ -222,12 +245,231 @@ async def get_layer2_topology(session: AsyncSession = Depends(get_session)):
                             "label": f"{neighbor.get('local_port', '')} ↔ {neighbor.get('remote_port_id', '')}",
                             "local_port": neighbor.get("local_port"),
                             "remote_port": neighbor.get("remote_port_id"),
-                            "remote_port_desc": neighbor.get("remote_port_desc")
+                            "remote_port_desc": neighbor.get("remote_port_desc"),
+                            "stp_state": port_state
+                        })
+    
+    calculator = STPTopologyCalculator(nodes_dict, edges)
+    filtered_nodes, tree_edges, root_bridge = calculator.calculate_tree_topology()
+    
+    return {
+        "nodes": filtered_nodes,
+        "edges": tree_edges,
+        "root_bridge": root_bridge
+    }
+
+
+@app.get("/api/topology/l3")
+async def get_l3_topology(session: AsyncSession = Depends(get_session)):
+    from sqlalchemy import select
+    from .models import IpInventory
+    import ipaddress
+    
+    result = await session.execute(select(IpInventory).where(IpInventory.network_role == "L3"))
+    l3_devices = result.scalars().all()
+    
+    nodes = []
+    edges = []
+    subnets = {}
+    seen_edges = set()
+    
+    for device in l3_devices:
+        device_ip = str(device.ip_address)
+        
+        nodes.append({
+            "id": device_ip,
+            "label": device.device_name or device_ip,
+            "ip": device_ip,
+            "network_role": "L3",
+            "vendor": device.vendor,
+            "model": device.model,
+            "connected_subnets": []
+        })
+        
+        snmp_data = device.snmp_data or {}
+        routing_table = snmp_data.get("routing_table", [])
+        
+        device_subnets = set()
+        for route in routing_table:
+            dest = route.get("destination", "")
+            mask = route.get("mask", "")
+            next_hop = route.get("next_hop", "")
+            
+            try:
+                if dest and mask and dest != "0.0.0.0":
+                    network = ipaddress.IPv4Network(f"{dest}/{mask}", strict=False)
+                    subnet_str = str(network.with_prefixlen)
+                    
+                    if next_hop == "0.0.0.0" or next_hop == dest:
+                        device_subnets.add(subnet_str)
+                        if subnet_str not in subnets:
+                            subnets[subnet_str] = []
+                        subnets[subnet_str].append(device_ip)
+            except (ValueError, ipaddress.AddressValueError):
+                continue
+        
+        for node in nodes:
+            if node["id"] == device_ip:
+                node["connected_subnets"] = list(device_subnets)
+                break
+    
+    for device in l3_devices:
+        device_ip = str(device.ip_address)
+        snmp_data = device.snmp_data or {}
+        lldp_data = snmp_data.get("lldp", {})
+        
+        if not lldp_data or not lldp_data.get("neighbors"):
+            continue
+        
+        for neighbor in lldp_data.get("neighbors", []):
+            remote_chassis = neighbor.get("remote_chassis_id", "")
+            remote_sysname = neighbor.get("remote_sysname", "")
+            
+            if not remote_chassis and not remote_sysname:
+                continue
+            
+            from sqlalchemy import or_, func, String
+            query = select(IpInventory).where(IpInventory.network_role == "L3")
+            conditions = []
+            if remote_chassis:
+                try:
+                    ipaddress.ip_address(remote_chassis)
+                    conditions.append(func.host(IpInventory.ip_address) == remote_chassis)
+                except ValueError:
+                    chassis_normalized = remote_chassis.replace('-', ':').lower()
+                    conditions.append(func.lower(func.replace(IpInventory.mac_address.cast(String), '-', ':')) == chassis_normalized)
+            if remote_sysname:
+                conditions.append(IpInventory.device_name == remote_sysname)
+            
+            if conditions:
+                result = await session.execute(query.where(or_(*conditions)))
+                remote_device = result.scalars().first()
+                
+                if remote_device:
+                    source_ip = str(device.ip_address)
+                    target_ip = str(remote_device.ip_address)
+                    
+                    edge_key = tuple(sorted([source_ip, target_ip]))
+                    if edge_key not in seen_edges:
+                        seen_edges.add(edge_key)
+                        edges.append({
+                            "from": source_ip,
+                            "to": target_ip,
+                            "label": "L3 Link",
+                            "local_port": neighbor.get("local_port"),
+                            "remote_port": neighbor.get("remote_port_id")
                         })
     
     return {
         "nodes": nodes,
-        "edges": edges
+        "edges": edges,
+        "subnets": subnets
+    }
+
+
+@app.get("/api/topology/l2")
+async def get_l2_topology(session: AsyncSession = Depends(get_session)):
+    from sqlalchemy import select
+    from .models import IpInventory
+    from .stp_calculator import STPTopologyCalculator
+    
+    result = await session.execute(select(IpInventory).where(IpInventory.network_role == "L2"))
+    l2_devices = result.scalars().all()
+    
+    nodes_dict = {}
+    edges = []
+    seen_edges = set()
+    
+    for device in l2_devices:
+        device_ip = str(device.ip_address)
+        snmp_data = device.snmp_data or {}
+        stp_data = snmp_data.get("stp", {})
+        
+        bridge_addr = stp_data.get("bridge_address")
+        designated_root = stp_data.get("designated_root")
+        root_cost = stp_data.get("root_cost", "")
+        
+        is_root = False
+        if bridge_addr and designated_root:
+            is_root = (bridge_addr == designated_root) or (root_cost == "0")
+        
+        nodes_dict[device_ip] = {
+            "id": device_ip,
+            "label": device.device_name or device_ip,
+            "ip": device_ip,
+            "network_role": "L2",
+            "vendor": device.vendor,
+            "model": device.model,
+            "is_root_bridge": is_root,
+            "bridge_address": bridge_addr,
+            "designated_root": designated_root,
+            "root_cost": root_cost
+        }
+    
+    for device in l2_devices:
+        device_ip = str(device.ip_address)
+        snmp_data = device.snmp_data or {}
+        lldp_data = snmp_data.get("lldp", {})
+        stp_data = snmp_data.get("stp", {})
+        
+        if not lldp_data or not lldp_data.get("neighbors"):
+            continue
+        
+        for neighbor in lldp_data.get("neighbors", []):
+            remote_chassis = neighbor.get("remote_chassis_id", "")
+            remote_sysname = neighbor.get("remote_sysname", "")
+            
+            if not remote_chassis and not remote_sysname:
+                continue
+            
+            from sqlalchemy import or_, func, String
+            import ipaddress
+            query = select(IpInventory).where(IpInventory.network_role == "L2")
+            conditions = []
+            if remote_chassis:
+                try:
+                    ipaddress.ip_address(remote_chassis)
+                    conditions.append(func.host(IpInventory.ip_address) == remote_chassis)
+                except ValueError:
+                    chassis_normalized = remote_chassis.replace('-', ':').lower()
+                    conditions.append(func.lower(func.replace(IpInventory.mac_address.cast(String), '-', ':')) == chassis_normalized)
+            if remote_sysname:
+                conditions.append(IpInventory.device_name == remote_sysname)
+            
+            if conditions:
+                result = await session.execute(query.where(or_(*conditions)))
+                remote_device = result.scalars().first()
+                
+                if remote_device:
+                    source_ip = str(device.ip_address)
+                    target_ip = str(remote_device.ip_address)
+                    
+                    local_port = neighbor.get("local_port", "")
+                    port_state = "unknown"
+                    
+                    stp_ports = stp_data.get("ports", {})
+                    if local_port in stp_ports:
+                        port_state = stp_ports[local_port].get("state", "unknown")
+                    
+                    edge_key = tuple(sorted([source_ip, target_ip]))
+                    if edge_key not in seen_edges:
+                        seen_edges.add(edge_key)
+                        edges.append({
+                            "from": source_ip,
+                            "to": target_ip,
+                            "label": f"{neighbor.get('local_port', '')} ({port_state})",
+                            "local_port": local_port,
+                            "remote_port": neighbor.get("remote_port_id"),
+                            "stp_state": port_state
+                        })
+    
+    calculator = STPTopologyCalculator(nodes_dict, edges)
+    filtered_nodes, tree_edges, root_bridge = calculator.calculate_tree_topology()
+    
+    return {
+        "nodes": filtered_nodes,
+        "edges": tree_edges,
+        "root_bridge": root_bridge
     }
 
 
@@ -448,6 +690,90 @@ async def trigger_device_mib_walk(
         import traceback
         print(f"[STATE-SERVER] Walk MIB error for {ip_address}: {str(exc)}\n{traceback.format_exc()}", flush=True)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+
+
+@app.post("/api/networks/discovered")
+async def store_discovered_networks(
+    request: dict,
+    session: AsyncSession = Depends(get_session)
+) -> dict:
+    from sqlalchemy import select
+    from .models import DiscoveredNetwork
+    
+    try:
+        networks = request.get("discovered_networks", [])
+        gateway_ip = request.get("gateway_ip", "")
+        
+        stored_count = 0
+        updated_count = 0
+        
+        for network_data in networks:
+            network_cidr = network_data.get("network")
+            
+            result = await session.execute(
+                select(DiscoveredNetwork).where(DiscoveredNetwork.network == network_cidr)
+            )
+            existing = result.scalars().first()
+            
+            if existing:
+                existing.last_seen = func.now()
+                existing.next_hop = network_data.get("next_hop")
+                existing.directly_connected = network_data.get("directly_connected", False)
+                updated_count += 1
+            else:
+                new_network = DiscoveredNetwork(
+                    network=network_cidr,
+                    destination=network_data.get("destination"),
+                    netmask=network_data.get("netmask"),
+                    next_hop=network_data.get("next_hop"),
+                    prefix_len=network_data.get("prefix_len"),
+                    num_addresses=network_data.get("num_addresses"),
+                    directly_connected=network_data.get("directly_connected", False),
+                    gateway_ip=gateway_ip,
+                    metadata=network_data
+                )
+                session.add(new_network)
+                stored_count += 1
+        
+        await session.commit()
+        
+        return {
+            "status": "ok",
+            "stored": stored_count,
+            "updated": updated_count,
+            "total": len(networks)
+        }
+    except Exception as e:
+        await session.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to store networks: {str(e)}")
+
+
+@app.get("/api/networks/discovered")
+async def list_discovered_networks(session: AsyncSession = Depends(get_session)) -> list:
+    from sqlalchemy import select
+    from .models import DiscoveredNetwork
+    
+    result = await session.execute(select(DiscoveredNetwork).order_by(DiscoveredNetwork.prefix_len))
+    networks = result.scalars().all()
+    
+    return [
+        {
+            "id": n.id,
+            "network": n.network,
+            "destination": str(n.destination) if n.destination else None,
+            "netmask": str(n.netmask) if n.netmask else None,
+            "next_hop": str(n.next_hop) if n.next_hop else None,
+            "prefix_len": n.prefix_len,
+            "num_addresses": n.num_addresses,
+            "directly_connected": n.directly_connected,
+            "gateway_ip": str(n.gateway_ip) if n.gateway_ip else None,
+            "discovered_at": n.discovered_at.isoformat() if n.discovered_at else None,
+            "last_seen": n.last_seen.isoformat() if n.last_seen else None
+        }
+        for n in networks
+    ]
 
 
 @app.post("/api/launch-terminal")

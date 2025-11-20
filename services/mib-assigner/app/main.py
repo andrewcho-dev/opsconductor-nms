@@ -127,56 +127,9 @@ async def health_server():
 
 
 async def assignment_loop():
-    print(f"[MIB-ASSIGN] Starting MIB assignment (interval={SCAN_INTERVAL_SECONDS}s)", flush=True)
-    
-    async with httpx.AsyncClient() as client:
-        while not stop_event.is_set():
-            try:
-                inventory = await fetch_inventory(client)
-                
-                if not inventory:
-                    print("[MIB-ASSIGN] No devices in inventory, waiting...", flush=True)
-                    await asyncio.sleep(SCAN_INTERVAL_SECONDS)
-                    continue
-                
-                devices_needing_mibs = [
-                    d for d in inventory
-                    if d.get("snmp_data") and not d.get("mib_id")
-                ]
-                
-                if not devices_needing_mibs:
-                    print("[MIB-ASSIGN] No devices need MIB assignment, waiting...", flush=True)
-                    await asyncio.sleep(SCAN_INTERVAL_SECONDS)
-                    continue
-                
-                print(f"[MIB-ASSIGN] Assigning MIBs to {len(devices_needing_mibs)} devices", flush=True)
-                
-                assigned_count = 0
-                for device in devices_needing_mibs:
-                    if stop_event.is_set():
-                        break
-                    
-                    ip = device.get("ip_address")
-                    if not ip:
-                        continue
-                    
-                    suggestions = await get_mib_suggestions(client, ip)
-                    if not suggestions:
-                        continue
-                    
-                    best_mib_id, mib_ids = await select_mibs(client, ip, suggestions)
-                    
-                    if best_mib_id and mib_ids:
-                        success = await assign_mibs(client, ip, best_mib_id, mib_ids)
-                        if success:
-                            assigned_count += 1
-                
-                print(f"[MIB-ASSIGN] Assigned MIBs to {assigned_count} devices", flush=True)
-                await asyncio.sleep(SCAN_INTERVAL_SECONDS)
-                
-            except Exception as e:
-                print(f"[MIB-ASSIGN] Assignment loop error: {e}", flush=True)
-                await asyncio.sleep(10)
+    print("[MIB-ASSIGN] DISABLED - MIB assignment service is disabled. Exiting.", flush=True)
+    stop_event.set()
+    return
 
 
 async def main():

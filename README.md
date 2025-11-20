@@ -13,16 +13,21 @@ OpsConductor NMS automatically:
 
 1. **Discovers Devices** - Finds all devices on your network through passive packet capture and active scanning
 2. **Identifies Device Types** - Classifies devices as routers, switches, firewalls, hosts, etc. using port scanning, SNMP, and AI
-3. **Enriches Information** - Gathers vendor info, model numbers, open ports, SNMP data, and detailed device metrics
-4. **Manages MIBs** - Maintains vendor-specific MIB libraries and automatically assigns them to appropriate devices
-5. **Provides Real-Time UI** - Web interface for viewing, filtering, and managing your complete network inventory
+3. **Discovers Layer 2 Topology** - Uses LLDP (Link Layer Discovery Protocol) to map physical network connections between devices
+4. **Classifies Network Roles** - Determines if devices are L2 switches, L3 routers, or endpoints based on SNMP data
+5. **Enriches Information** - Gathers vendor info, model numbers, open ports, SNMP data, and detailed device metrics
+6. **Manages MIBs** - Maintains vendor-specific MIB libraries and automatically assigns them to appropriate devices
+7. **Provides Real-Time UI** - Web interface for viewing, filtering, and managing your complete network inventory with topology visualization
 
 ---
 
 ## Features
 
 - **Automated Discovery**: Passive network observation + active scanning
-- **AI Classification**: LLM (Phi-3) analyzes evidence to classify device types
+- **AI Classification**: LLM (Phi-3) analyzes evidence to classify device types (optional, requires GPU)
+- **LLDP Neighbor Discovery**: Automatically discovers physical Layer 2 connections between network devices
+- **Layer 2 Topology Visualization**: Interactive network map showing physical device connections
+- **Network Role Classification**: Automatic L2/L3/Endpoint classification based on IP forwarding, routing tables, and STP
 - **SNMP Integration**: Automatic SNMP discovery and detailed metric collection
 - **Human-Readable OID Labels**: Resolves numeric SNMP OIDs to text labels (e.g., "prtMarkerLifeCount.1.1")
 - **MAC Vendor Lookup**: IEEE OUI database for vendor identification
@@ -69,13 +74,13 @@ MAC Enricher  MIB      MIB      LLM
 | **State Server** | API, database, WebSocket streaming | ✅ Running |
 | **Packet Collector** | Passive packet capture (ARP, flows) | ✅ Running |
 | **Port Scanner** | Active TCP/UDP port scanning | ✅ Running |
-| **SNMP Discovery** | SNMP queries for device info | ✅ Running |
+| **SNMP Discovery** | SNMP queries for device info and network role classification | ✅ Running |
 | **MAC Enricher** | MAC OUI vendor lookup | ✅ Running |
 | **MIB Assigner** | Automatic MIB assignment | ✅ Running |
-| **MIB Walker** | SNMP tree walking with OID text label resolution | ✅ Running |
-| **LLM Analyst** | AI-powered device classification | ✅ Running |
-| **vLLM** | LLM inference engine (Phi-3) | ✅ Running |
-| **UI** | React-based inventory grid | ✅ Running |
+| **MIB Walker** | SNMP tree walking with OID text label resolution and LLDP neighbor discovery | ✅ Running |
+| **LLM Analyst** | AI-powered device classification | ⚙️ Optional (requires GPU) |
+| **vLLM** | LLM inference engine (Phi-3) | ⚙️ Optional (requires GPU) |
+| **UI** | React-based inventory grid with topology visualization | ✅ Running |
 
 ---
 
@@ -313,10 +318,26 @@ curl -X DELETE http://localhost:8080/api/mibs/1
 #### Trigger Manual MIB Walk
 
 ```bash
-curl -X POST http://localhost:8080/api/inventory/192.168.10.50/walk-mib
+curl -X POST http://localhost:8080/api/inventory/192.168.10.50/mibs/walk
 ```
 
-**Note**: The MIB walker automatically resolves numeric OIDs to human-readable text labels using PySNMP's MIB resolution. Standard MIBs (SNMPv2-MIB, IF-MIB, Printer-MIB, etc.) are loaded automatically from http://mibs.pysnmp.com.
+**Note**: The MIB walker automatically resolves numeric OIDs to human-readable text labels using PySNMP's MIB resolution. Standard MIBs (SNMPv2-MIB, IF-MIB, Printer-MIB, LLDP-MIB, etc.) are loaded automatically from http://mibs.pysnmp.com.
+
+#### View Layer 2 Topology
+
+```bash
+curl http://localhost:8080/api/topology/layer2 | jq
+```
+
+Returns nodes and edges discovered via LLDP neighbor relationships.
+
+#### Get Device Neighbors
+
+```bash
+curl http://localhost:8080/api/inventory/192.168.10.50/neighbors | jq
+```
+
+Shows LLDP neighbors with local/remote port information and resolved device IPs.
 
 ---
 
@@ -480,11 +501,15 @@ Full API documentation: See [repo.md](./repo.md#api-endpoints)
 - `GET /health` - Health check
 - `GET /api/inventory` - List devices
 - `GET /api/inventory/{ip}` - Get device details
+- `GET /api/inventory/{ip}/neighbors` - Get LLDP neighbors for device
 - `PUT /api/inventory/{ip}` - Update device
 - `POST /api/inventory/{ip}/confirm` - Confirm device type
-- `POST /api/inventory/{ip}/walk-mib` - Trigger manual MIB walk
+- `POST /api/inventory/{ip}/mibs/walk` - Trigger manual MIB walk
+- `POST /api/inventory/{ip}/mibs/reassign` - Reassign MIB for device
+- `GET /api/topology/layer2` - Get Layer 2 topology (LLDP)
 - `GET /api/mibs` - List MIBs
 - `GET /api/mibs/{mib_id}` - Get MIB content
+- `GET /api/inventory/{ip}/mibs/suggestions` - Get MIB suggestions for device
 - `POST /api/mibs` - Add MIB
 - `DELETE /api/mibs/{mib_id}` - Delete MIB
 - `GET /graph` - Get topology graph
@@ -718,6 +743,14 @@ Contributions welcome! Please see [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## Recent Updates
 
+### 2025-11-19
+
+- ✅ **LLDP Neighbor Discovery**: Automatically discovers Layer 2 physical connections using LLDP-MIB
+- ✅ **Layer 2 Topology API**: New endpoint for retrieving LLDP-based network topology
+- ✅ **Network Role Classification**: Automatic L2/L3/Endpoint classification based on IP forwarding and STP
+- ✅ **Device Neighbor API**: View LLDP neighbors with port mappings for any device
+- ✅ **Topology Visualization**: Interactive topology map in UI showing physical connections
+
 ### 2025-11-14
 
 - ✅ **SNMP OID Text Label Resolution**: OIDs now display as human-readable labels (e.g., "prtInputName.1.1" instead of "1.1.3.1")
@@ -741,9 +774,10 @@ Contributions welcome! Please see [CONTRIBUTING.md](./CONTRIBUTING.md).
 - [ ] Multi-network support
 - [ ] Historical tracking
 - [ ] Alerting system
-- [ ] Topology visualization
+- [ ] Enhanced topology visualization (geographic layout, custom grouping)
 - [ ] Configuration backup
 - [ ] Anomaly detection
+- [ ] CDP (Cisco Discovery Protocol) support alongside LLDP
 
 ---
 

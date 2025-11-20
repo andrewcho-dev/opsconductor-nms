@@ -176,53 +176,9 @@ async def health_server():
 
 
 async def enrichment_loop():
-    global oui_map
-    
-    print(f"[MAC] Starting MAC enrichment (interval={SCAN_INTERVAL_SECONDS}s)", flush=True)
-    
-    loop = asyncio.get_event_loop()
-    with concurrent.futures.ThreadPoolExecutor() as executor:
-        oui_map = await loop.run_in_executor(executor, load_or_download_oui)
-    
-    if not oui_map:
-        print("[MAC] Failed to load OUI database", flush=True)
-        return
-    
-    async with httpx.AsyncClient() as client:
-        while not stop_event.is_set():
-            try:
-                inventory = await fetch_inventory(client)
-                
-                devices = [d for d in inventory if d.get("mac_address") and not d.get("vendor")]
-                
-                if not devices:
-                    await asyncio.sleep(SCAN_INTERVAL_SECONDS)
-                    continue
-                
-                print(f"[MAC] Enriching {len(devices)} devices", flush=True)
-                
-                count = 0
-                for device in devices:
-                    if stop_event.is_set():
-                        break
-                    
-                    ip = device.get("ip_address")
-                    mac = device.get("mac_address")
-                    
-                    if not ip or not mac:
-                        continue
-                    
-                    vendor = lookup_vendor(mac)
-                    if vendor:
-                        await update_device_vendor(client, ip, vendor)
-                        count += 1
-                
-                print(f"[MAC] Enriched {count} devices", flush=True)
-                await asyncio.sleep(SCAN_INTERVAL_SECONDS)
-                
-            except Exception as e:
-                print(f"[MAC] Loop error: {e}", flush=True)
-                await asyncio.sleep(10)
+    print("[MAC] DISABLED - MAC enrichment service is disabled. Exiting.", flush=True)
+    stop_event.set()
+    return
 
 
 async def main():
