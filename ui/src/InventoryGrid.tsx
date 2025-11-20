@@ -43,6 +43,7 @@ interface InventoryGridProps {
   apiBase: string;
   onNavigateToAdmin: () => void;
   onNavigateToTopology: () => void;
+  onNavigateToDiscovery?: () => void;
 }
 
 interface SnmpConfig {

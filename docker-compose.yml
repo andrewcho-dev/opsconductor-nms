@@ -30,13 +30,14 @@ services:
   postgres:
     image: postgres:16
     environment:
-      - POSTGRES_DB=topology
-      - POSTGRES_USER=topo
-      - POSTGRES_PASSWORD=topo
+      - POSTGRES_INITDB_ARGS=-c shared_preload_libraries=pgcrypto
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./services/router-discovery/migrations/001_create_schema.sql:/docker-entrypoint-initdb.d/001_create_schema.sql
+    ports:
+      - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U topo -d topology"]
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
       timeout: 3s
       retries: 10
@@ -98,6 +99,28 @@ services:
     depends_on:
       state-server:
         condition: service_started
+
+  router-discovery:
+    build:
+      context: ./services/router-discovery
+      dockerfile: Dockerfile
+    environment:
+      - DATABASE_URL=postgresql://opsconductor:opsconductor@postgres:5432/opsconductor
+      - LOG_LEVEL=INFO
+      - PORT=8000
+    volumes:
+      - ./services/router-discovery/app:/app/app
+    ports:
+      - "8200:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
 
   # DISABLED: packet-collector
   # packet-collector:

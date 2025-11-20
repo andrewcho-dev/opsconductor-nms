@@ -2,10 +2,11 @@ import { useState } from "react";
 import InventoryGrid from "./InventoryGrid";
 import Admin from "./Admin";
 import TopologyMap from "./TopologyMap";
+import DiscoveryPage from "./DiscoveryPage";
 
 const apiBase = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
 
-type Page = "inventory" | "admin" | "topology";
+type Page = "inventory" | "admin" | "topology" | "discovery";
 
 function App() {
   const [currentPage, setCurrentPage] = useState<Page>("inventory");
@@ -18,6 +19,7 @@ function App() {
             apiBase={apiBase} 
             onNavigateToAdmin={() => setCurrentPage("admin")}
             onNavigateToTopology={() => setCurrentPage("topology")}
+            onNavigateToDiscovery={() => setCurrentPage("discovery")}
           />
         )}
         {currentPage === "admin" && (
@@ -25,6 +27,9 @@ function App() {
         )}
         {currentPage === "topology" && (
           <TopologyMap apiBase={apiBase} onBack={() => setCurrentPage("inventory")} />
+        )}
+        {currentPage === "discovery" && (
+          <DiscoveryPage apiBase={apiBase} onBack={() => setCurrentPage("inventory")} />
         )}
       </div>
     </div>
