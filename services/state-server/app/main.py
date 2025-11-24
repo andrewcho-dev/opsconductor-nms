@@ -5,9 +5,12 @@ from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconn
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, cast
+from sqlalchemy.dialects.postgresql import INET
 
 from .config import settings
 from .database import async_session_factory, init_db
+from .models import IpInventory
 from .schemas import (
     DeviceConfirmationCreate,
     DeviceConfirmationResponse,
@@ -861,3 +864,59 @@ async def browse_filesystem(path: str = "/") -> dict:
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to browse filesystem: {str(exc)}") from exc
+
+
+@app.get("/api/routing/10.120.0.1")
+async def get_routing_table(session: AsyncSession = Depends(get_session)):
+    """Get routing table from 10.120.0.1 via SNMP - using direct SNMP query."""
+    import asyncio
+    import sys
+    sys.path.insert(0, '/app/../router-discovery/app')
+    
+    target_ip = "10.120.0.1"
+    
+    result = await session.execute(
+        select(IpInventory).where(IpInventory.ip_address == cast(target_ip, INET))
+    )
+    device = result.scalars().first()
+    
+    if device:
+        community = device.snmp_community or "public"
+        version = device.snmp_version or "2c"
+        hostname = device.hostname
+    else:
+        community = "public"
+        version = "2c"
+        hostname = None
+    
+    def fetch_snmp_routes():
+        """Fetch routes using SNMP."""
+        try:
+            import snmp_routing
+            
+            routes = snmp_routing.get_routing_entries(target_ip, community, version)
+            
+            route_list = []
+            for route in routes:
+                route_list.append({
+                    "destination": route.destination_ip,
+                    "netmask": route.netmask,
+                    "next_hop": route.next_hop,
+                    "protocol": route.protocol
+                })
+            
+            return route_list
+        except Exception as e:
+            raise Exception(f"SNMP fetch failed: {str(e)}")
+    
+    try:
+        route_list = await asyncio.to_thread(fetch_snmp_routes)
+        
+        return {
+            "device_ip": target_ip,
+            "hostname": hostname,
+            "total_routes": len(route_list),
+            "routes": route_list
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch routing table: {str(e)}")

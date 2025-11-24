@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, Index, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, Index, UniqueConstraint, JSON
 from sqlalchemy.dialects.postgresql import INET, CIDR
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
@@ -18,6 +18,7 @@ class DiscoveryRun(Base):
     snmp_community = Column(String, nullable=False)
     snmp_version = Column(String, nullable=False)  # "2c" or "3"
     error_message = Column(Text, nullable=True)
+    cli_default_credentials = Column(JSON, nullable=False, default=list)
     
     # Relationships
     routers = relationship('Router', back_populates='run', cascade='all, delete-orphan')

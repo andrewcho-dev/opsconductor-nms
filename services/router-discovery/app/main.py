@@ -3,8 +3,8 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from database import init_db
-from api import router as discovery_router
+from .database import init_db
+from .api import router as discovery_router
 
 # Setup logging
 logging.basicConfig(

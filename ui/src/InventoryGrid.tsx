@@ -44,6 +44,7 @@ interface InventoryGridProps {
   onNavigateToAdmin: () => void;
   onNavigateToTopology: () => void;
   onNavigateToDiscovery?: () => void;
+  onNavigateToRouting?: () => void;
 }
 
 interface SnmpConfig {
@@ -141,7 +142,9 @@ function renderComplexValue(value: any, depth: number = 0): React.ReactNode {
   return String(value);
 }
 
-function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: InventoryGridProps) {
+const STATE_SERVER_API_BASE = "http://10.120.0.18:8080";
+
+function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology, onNavigateToDiscovery, onNavigateToRouting }: InventoryGridProps) {
   const [devices, setDevices] = useState<InventoryDevice[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -205,7 +208,7 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
 
   const loadInventory = async () => {
     try {
-      const response = await fetch(`${apiBase}/api/inventory`);
+      const response = await fetch(`${STATE_SERVER_API_BASE}/api/inventory`);
       if (!response.ok) throw new Error("Failed to fetch inventory");
       const data = await response.json();
       setDevices(data);
@@ -218,7 +221,7 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
 
   const loadMibs = async () => {
     try {
-      const response = await fetch(`${apiBase}/api/mibs`);
+      const response = await fetch(`${STATE_SERVER_API_BASE}/api/mibs`);
       if (!response.ok) throw new Error("Failed to fetch MIBs");
       const data = await response.json();
       setAllMibs(data);
@@ -265,7 +268,7 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
     });
 
     try {
-      const response = await fetch(`${apiBase}/api/inventory/${device.ip_address}/mibs/suggestions`);
+      const response = await fetch(`${STATE_SERVER_API_BASE}/api/inventory/${device.ip_address}/mibs/suggestions`);
       if (response.ok) {
         const suggestions = await response.json();
         setSuggestedMibs(suggestions);
@@ -283,7 +286,7 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
 
     setSaving(true);
     try {
-      const response = await fetch(`${apiBase}/api/inventory/${snmpModalDevice.ip_address}`, {
+      const response = await fetch(`${STATE_SERVER_API_BASE}/api/inventory/${snmpModalDevice.ip_address}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -308,7 +311,7 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
 
     setSaving(true);
     try {
-      const response = await fetch(`${apiBase}/api/inventory/${snmpModalDevice.ip_address}/mibs/reassign`, {
+      const response = await fetch(`${STATE_SERVER_API_BASE}/api/inventory/${snmpModalDevice.ip_address}/mibs/reassign`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       });
@@ -339,7 +342,7 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
 
     setSaving(true);
     try {
-      const response = await fetch(`${apiBase}/api/inventory/${snmpModalDevice.ip_address}/mibs/walk`, {
+      const response = await fetch(`${STATE_SERVER_API_BASE}/api/inventory/${snmpModalDevice.ip_address}/mibs/walk`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       });
@@ -473,9 +476,17 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology }: Inv
           <button onClick={loadInventory} className="refresh-btn">
             Refresh
           </button>
+          <button onClick={onNavigateToRouting} className="admin-btn" style={{ backgroundColor: "#10b981" }}>
+            Routing Table
+          </button>
           <button onClick={onNavigateToTopology} className="admin-btn" style={{ backgroundColor: "#7c3aed" }}>
             Topology
           </button>
+          {onNavigateToDiscovery && (
+            <button onClick={onNavigateToDiscovery} className="admin-btn" style={{ backgroundColor: "#06b6d4" }}>
+              Discovery
+            </button>
+          )}
           <button onClick={onNavigateToAdmin} className="admin-btn">
             Admin
           </button>

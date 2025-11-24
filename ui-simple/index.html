@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Network Management</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; padding: 20px; background: #f5f5f5; }
+        .container { max-width: 1400px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h1 { margin-bottom: 20px; color: #333; }
+        .controls { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
+        button { padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 600; }
+        button:hover { opacity: 0.9; }
+        .btn-primary { background: #3b82f6; color: white; }
+        .btn-success { background: #10b981; color: white; }
+        .btn-purple { background: #7c3aed; color: white; }
+        .btn-cyan { background: #06b6d4; color: white; }
+        .btn-gray { background: #6b7280; color: white; }
+        
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #e5e7eb; }
+        th { background: #f9fafb; font-weight: 600; color: #374151; position: sticky; top: 0; }
+        tr:hover { background: #f9fafb; }
+        
+        .loading { text-align: center; padding: 40px; color: #6b7280; }
+        .error { background: #fee2e2; color: #991b1b; padding: 12px; border-radius: 4px; margin-bottom: 20px; }
+        
+        .device-info { background: #f0f9ff; padding: 20px; border-radius: 8px; margin-bottom: 20px; }
+        .device-info h2 { color: #0369a1; margin-bottom: 10px; }
+        .info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; }
+        .info-item { display: flex; flex-direction: column; }
+        .info-label { font-size: 12px; color: #64748b; font-weight: 600; margin-bottom: 4px; }
+        .info-value { font-size: 16px; color: #0f172a; font-weight: 500; }
+        
+        .next-hops { background: #fef3c7; padding: 15px; border-radius: 8px; margin-bottom: 20px; }
+        .next-hops h3 { color: #92400e; margin-bottom: 10px; }
+        .next-hop-list { display: flex; flex-wrap: wrap; gap: 10px; }
+        .next-hop { background: white; padding: 8px 12px; border-radius: 4px; font-family: monospace; font-size: 14px; border: 1px solid #fbbf24; }
+        
+        .route-row:nth-child(even) { background: #f9fafb; }
+        .mono { font-family: monospace; font-size: 13px; }
+        
+        #inventory-table td { font-size: 13px; }
+        .ip-cell { color: #2563eb; font-family: monospace; font-weight: 500; }
+        .badge { padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; display: inline-block; }
+        .badge-success { background: #d1fae5; color: #065f46; }
+        .badge-warning { background: #fef3c7; color: #92400e; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Network Management System</h1>
+        
+        <div class="controls">
+            <button class="btn-primary" onclick="showInventory()">Inventory</button>
+            <button class="btn-success" onclick="showRouting()">Routing Table</button>
+            <button class="btn-purple" onclick="alert('Topology not implemented')">Topology</button>
+            <button class="btn-cyan" onclick="alert('Discovery not implemented')">Discovery</button>
+            <button class="btn-gray" onclick="alert('Admin not implemented')">Admin</button>
+        </div>
+        
+        <div id="content">
+            <div class="loading">Loading...</div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://10.120.0.18:8080';
+        
+        async function showInventory() {
+            const content = document.getElementById('content');
+            content.innerHTML = '<div class="loading">Loading inventory...</div>';
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/inventory`);
+                if (!response.ok) throw new Error('Failed to fetch inventory');
+                const devices = await response.json();
+                
+                let html = `
+                    <h2>Inventory (${devices.length} devices)</h2>
+                    <table id="inventory-table">
+                        <thead>
+                            <tr>
+                                <th>IP Address</th>
+                                <th>MAC</th>
+                                <th>Hostname</th>
+                                <th>Type</th>
+                                <th>Role</th>
+                                <th>Vendor</th>
+                                <th>SNMP</th>
+                                <th>Last Seen</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                `;
+                
+                devices.forEach(device => {
+                    const snmpStatus = device.snmp_enabled ? 
+                        '<span class="badge badge-success">ENABLED</span>' : 
+                        '<span class="badge badge-warning">DISABLED</span>';
+                    
+                    html += `
+                        <tr>
+                            <td class="ip-cell">${device.ip_address}</td>
+                            <td class="mono">${device.mac_address || '-'}</td>
+                            <td>${device.hostname || '-'}</td>
+                            <td>${device.device_type || '-'}</td>
+                            <td>${device.network_role || '-'}</td>
+                            <td>${device.vendor || '-'}</td>
+                            <td>${snmpStatus}</td>
+                            <td>${new Date(device.last_seen).toLocaleString()}</td>
+                        </tr>
+                    `;
+                });
+                
+                html += '</tbody></table>';
+                content.innerHTML = html;
+                
+            } catch (error) {
+                content.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+            }
+        }
+        
+        async function showRouting(customIp) {
+            const targetIp = customIp || '10.120.0.1';
+            const content = document.getElementById('content');
+            content.innerHTML = `<div class="loading">Loading routing table from ${targetIp}...</div>`;
+            
+            try {
+                const response = await fetch(`${API_BASE}/api/routing/${targetIp}`);
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to fetch routing table');
+                }
+                const data = await response.json();
+                
+                const nextHops = [...new Set(data.routes.map(r => r.next_hop))].sort();
+                
+                let html = `
+                    <div class="device-info">
+                        <h2>Device Information</h2>
+                        <div class="info-grid">
+                            <div class="info-item">
+                                <div class="info-label">IP Address</div>
+                                <div class="info-value">${data.device_ip}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">Hostname</div>
+                                <div class="info-value">${data.hostname || 'Unknown'}</div>
+                            </div>
+                            <div class="info-item">
+                                <div class="info-label">Total Routes</div>
+                                <div class="info-value">${data.total_routes}</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="next-hops">
+                        <h3>Next Hops (${nextHops.length})</h3>
+                        <div class="next-hop-list">
+                            ${nextHops.map(nh => `<div class="next-hop">${nh}</div>`).join('')}
+                        </div>
+                    </div>
+                    
+                    <h2>Routing Table</h2>
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Destination</th>
+                                <th>Netmask</th>
+                                <th>Next Hop</th>
+                                <th>Protocol</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                `;
+                
+                data.routes.forEach(route => {
+                    html += `
+                        <tr class="route-row">
+                            <td class="mono">${route.destination}</td>
+                            <td class="mono">${route.netmask}</td>
+                            <td class="mono">${route.next_hop}</td>
+                            <td>${route.protocol}</td>
+                        </tr>
+                    `;
+                });
+                
+                html += '</tbody></table>';
+                
+                if (data.total_routes === 0) {
+                    html += `
+                        <div class="error" style="margin-top: 20px;">
+                            <strong>No routes found!</strong><br><br>
+                            This device (${data.device_ip}) is responding to SNMP but has no routing table entries available via SNMP.<br><br>
+                            <strong>Possible causes:</strong><br>
+                            • Routing table is not exposed in SNMP configuration<br>
+                            • Device uses vendor-specific MIBs<br>
+                            • SNMP community string has limited access<br>
+                            • Device is a switch/endpoint, not a router<br><br>
+                            <strong>ipForwarding:</strong> Enabled (device is configured as router)<br>
+                            <strong>MIBs checked:</strong> ipRouteTable (deprecated), ipCidrRouteTable (modern)
+                        </div>
+                    `;
+                }
+                
+                html += `
+                    <div style="margin-top: 20px;">
+                        <button class="btn-primary" onclick="showRouting('${targetIp}')">Refresh</button>
+                        <button class="btn-gray" onclick="showInventory()">Back to Inventory</button>
+                    </div>
+                `;
+                
+                content.innerHTML = html;
+                
+            } catch (error) {
+                content.innerHTML = `
+                    <div class="error">Error: ${error.message}</div>
+                    <button class="btn-gray" onclick="showInventory()">Back to Inventory</button>
+                `;
+            }
+        }
+        
+        // Load inventory on startup
+        showInventory();
+    </script>
+</body>
+</html>

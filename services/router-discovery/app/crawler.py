@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Set, Tuple, Optional
+from typing import Dict, Set, Tuple, Optional, List
 from ipaddress import IPv4Address, IPv4Network
 from datetime import datetime, timezone
 from collections import deque
@@ -7,9 +7,10 @@ from collections import deque
 from sqlalchemy.orm import Session
 from sqlalchemy import and_
 
-from snmp_adapter import SnmpAdapter, SnmpError
-from router_classifier import RouterClassifier
-from models import DiscoveryRun, Router, RouterNetwork, RouterRoute, TopologyEdge
+from .snmp_adapter import SnmpAdapter, SnmpError, RouteEntry
+from .cli_routing import fetch_vrf_routes_via_ssh
+from .router_classifier import RouterClassifier
+from .models import DiscoveryRun, Router, RouterNetwork, RouterRoute, TopologyEdge
 
 logger = logging.getLogger(__name__)
 
@@ -22,8 +23,9 @@ class RouterDiscoveryCrawler:
         self.snmp_adapter = snmp_adapter
         self.classifier = classifier
         self.logger = logger_instance or logger
+        self.default_cli_credentials: List[Dict[str, Optional[str]]] = []
     
-    def start_run(self, root_ip: str, snmp_community: str, snmp_version: str) -> int:
+    def start_run(self, root_ip: str, snmp_community: str, snmp_version: str, cli_default_credentials: Optional[List[Dict[str, Optional[str]]]] = None) -> int:
         """
         Start a discovery run from root_ip using BFS.
         Returns the run_id.
@@ -38,12 +40,16 @@ class RouterDiscoveryCrawler:
                 raise RuntimeError(f"Discovery run {running_run.id} is already RUNNING")
             
             # Create new run record
+            cli_defaults = cli_default_credentials or []
+            self.default_cli_credentials = cli_defaults
+
             run = DiscoveryRun(
                 status='RUNNING',
                 root_ip=root_ip,
                 snmp_community=snmp_community,
                 snmp_version=snmp_version,
-                started_at=datetime.now(timezone.utc)
+                started_at=datetime.now(timezone.utc),
+                cli_default_credentials=cli_defaults,
             )
             db.add(run)
             db.commit()
@@ -51,7 +57,14 @@ class RouterDiscoveryCrawler:
             self.logger.info(f"Started discovery run {run_id} from {root_ip}")
             
             # Execute BFS
-            self._execute_bfs(db, run_id, root_ip, snmp_community, snmp_version)
+            self._execute_bfs(
+                db,
+                run_id,
+                queue_seed=[root_ip],
+                snmp_community=snmp_community,
+                snmp_version=snmp_version,
+                cli_credentials=self.default_cli_credentials,
+            )
             
             # Mark run as COMPLETED
             run = db.query(DiscoveryRun).filter(DiscoveryRun.id == run_id).first()
@@ -80,10 +93,109 @@ class RouterDiscoveryCrawler:
         finally:
             db.close()
     
-    def _execute_bfs(self, db: Session, run_id: int, root_ip: str, snmp_community: str, snmp_version: str):
-        """Execute BFS crawl starting from root_ip."""
-        queue = deque([root_ip])
-        visited: Set[str] = set()
+    def resume_run(self, run_id: int, seed_ips: Optional[List[str]] = None) -> int:
+        """Resume a discovery run with additional seed IPs (e.g., from CLI discovery)."""
+        if not seed_ips:
+            return run_id
+        db = self.db_session_factory()
+        try:
+            run = db.query(DiscoveryRun).filter(DiscoveryRun.id == run_id).first()
+            if not run:
+                raise RuntimeError(f"Discovery run {run_id} not found")
+            run.status = 'RUNNING'
+            run.finished_at = None
+            db.commit()
+
+            existing_ips = {
+                str(row[0])
+                for row in db.query(Router.primary_ip).filter(Router.run_id == run_id).all()
+                if row[0] is not None
+            }
+
+            cli_credentials = run.cli_default_credentials or []
+
+            self._execute_bfs(
+                db,
+                run_id,
+                queue_seed=seed_ips,
+                snmp_community=run.snmp_community,
+                snmp_version=run.snmp_version,
+                cli_credentials=cli_credentials,
+                visited_seed=existing_ips,
+            )
+
+            run = db.query(DiscoveryRun).filter(DiscoveryRun.id == run_id).first()
+            run.status = 'COMPLETED'
+            run.finished_at = datetime.now(timezone.utc)
+            db.commit()
+            return run_id
+
+        except Exception as e:
+            db.rollback()
+            self.logger.error(f"Failed to resume discovery run {run_id}: {e}")
+            raise
+        finally:
+            db.close()
+
+    def _get_routes_via_snmp(self, target_ip: str, community: str, version: str) -> List[RouteEntry]:
+        try:
+            return self.snmp_adapter.get_routing_entries(target_ip, community, version)
+        except Exception as exc:
+            self.logger.warning(f"Failed SNMP route fetch on {target_ip}: {exc}")
+            return []
+
+    def _get_routes_via_cli(self, target_ip: str, credentials: List[Dict[str, Optional[str]]]) -> List[RouteEntry]:
+        for cred in credentials:
+            username = cred.get("username")
+            password = cred.get("password")
+            if not username or not password:
+                continue
+            try:
+                cli_routes = fetch_vrf_routes_via_ssh(target_ip, username=username, password=password)
+            except Exception as exc:
+                self.logger.debug(
+                    "CLI route fetch failed",
+                    extra={"target": target_ip, "username": username, "error": str(exc)},
+                )
+                continue
+
+            if cli_routes:
+                return self._convert_cli_routes(cli_routes)
+        return []
+
+    def _convert_cli_routes(self, cli_routes) -> List[RouteEntry]:
+        converted: List[RouteEntry] = []
+        for entry in cli_routes:
+            try:
+                network = IPv4Network(f"{entry.destination}/{entry.prefix_length}", strict=False)
+                converted.append(
+                    RouteEntry(
+                        destination_ip=str(network.network_address),
+                        netmask=str(network.netmask),
+                        next_hop=entry.next_hop,
+                        protocol=entry.protocol,
+                    )
+                )
+            except Exception as exc:
+                self.logger.debug(
+                    "Failed to convert CLI route",
+                    extra={"route": entry.destination, "prefix": entry.prefix_length, "error": str(exc)},
+                )
+        return converted
+    
+    def _execute_bfs(
+        self,
+        db: Session,
+        run_id: int,
+        queue_seed: List[str],
+        snmp_community: str,
+        snmp_version: str,
+        cli_credentials: Optional[List[Dict[str, Optional[str]]]] = None,
+        visited_seed: Optional[Set[str]] = None,
+    ):
+        """Execute BFS crawl starting from provided queue seed."""
+        queue = deque(queue_seed)
+        visited: Set[str] = set(visited_seed or [])
         ip_to_router_id: Dict[str, int] = {}
         
         while queue:
@@ -95,19 +207,13 @@ class RouterDiscoveryCrawler:
             visited.add(current_ip)
             self.logger.info(f"Processing router: {current_ip}")
             
-            # Query SNMP
+            # Query SNMP for classification info
             try:
                 system_info = self.snmp_adapter.get_system_info(current_ip, snmp_community, snmp_version)
                 ip_forwarding = self.snmp_adapter.get_ip_forwarding(current_ip, snmp_community, snmp_version)
                 interfaces = self.snmp_adapter.get_interfaces_and_addresses(current_ip, snmp_community, snmp_version)
-                routes = self.snmp_adapter.get_routing_entries(current_ip, snmp_community, snmp_version)
-                
-                self.logger.debug(f"  System: {system_info.hostname}, IP forwarding: {ip_forwarding}")
-                self.logger.debug(f"  Interfaces: {len(interfaces)}, Routes: {len(routes)}")
-            
             except SnmpError as e:
                 self.logger.warning(f"SNMP error on {current_ip}: {e}")
-                # Record as non-router
                 router = Router(
                     run_id=run_id,
                     primary_ip=current_ip,
@@ -123,7 +229,14 @@ class RouterDiscoveryCrawler:
                 db.add(router)
                 db.commit()
                 continue
-            
+
+            routes = self._get_routes_via_snmp(current_ip, snmp_community, snmp_version)
+            if not routes and cli_credentials:
+                cli_routes = self._get_routes_via_cli(current_ip, cli_credentials)
+                if cli_routes:
+                    routes = cli_routes
+                    self.logger.info(f"  Retrieved {len(routes)} routes via CLI fallback for {current_ip}")
+
             # Classify device
             classification = self.classifier.classify_router(system_info, ip_forwarding, interfaces, routes)
             
@@ -152,7 +265,7 @@ class RouterDiscoveryCrawler:
                 try:
                     ip = IPv4Address(iface.ip)
                     netmask = IPv4Address(iface.netmask)
-                    network = IPv4Network((ip, netmask), strict=False)
+                    network = IPv4Network((ip, str(netmask)), strict=False)
                     
                     net = RouterNetwork(
                         run_id=run_id,
@@ -162,14 +275,16 @@ class RouterDiscoveryCrawler:
                     )
                     db.add(net)
                 except Exception as e:
-                    self.logger.debug(f"Failed to store interface {iface.ip}/{iface.netmask}: {e}")
+                    self.logger.error(f"Failed to store interface {iface.ip}/{iface.netmask}: {e}", exc_info=True)
             
             # Store routes
             for route in routes:
                 try:
                     dest_ip = IPv4Address(route.destination_ip)
                     netmask = IPv4Address(route.netmask)
-                    dest_network = IPv4Network((dest_ip, netmask), strict=False)
+                    dest_network = IPv4Network((dest_ip, str(netmask)), strict=False)
+                    
+                    cidr_str = f"{dest_network.network_address}/{dest_network.prefixlen}"
                     
                     # Parse next hop
                     next_hop_inet = None
@@ -183,15 +298,15 @@ class RouterDiscoveryCrawler:
                     rt = RouterRoute(
                         run_id=run_id,
                         router_id=router_id,
-                        destination=str(dest_network),
+                        destination=cidr_str,
                         next_hop=next_hop_inet,
                         protocol=route.protocol,
-                        admin_distance=None,  # Phase 0: not extracted yet
+                        admin_distance=None,
                         metric=None
                     )
                     db.add(rt)
                 except Exception as e:
-                    self.logger.debug(f"Failed to store route {route.destination_ip}/{route.netmask}: {e}")
+                    self.logger.error(f"Failed to store route {route.destination_ip}/{route.netmask}: {e}", exc_info=True)
             
             db.commit()
             
@@ -264,7 +379,7 @@ class RouterDiscoveryCrawler:
                             self.logger.debug(f"  Created edge: {current_ip} -> router_{to_id}")
         
         except Exception as e:
-            self.logger.debug(f"Failed to create topology edges for {current_ip}: {e}")
+            self.logger.error(f"Failed to create topology edges for {current_ip}: {e}", exc_info=True)
     
     def _extract_vendor(self, system_info) -> Optional[str]:
         """Extract vendor name from system description (simple heuristic)."""

@@ -81,8 +81,8 @@ async def query_routing_table(ip: str, version: str = "2c") -> List[Dict]:
                 oid_parts = oid_str.split('.')
                 dest = '.'.join(oid_parts[-4:])
                 
-                mask = normalize_ip_address(varBinds[1][1])
-                next_hop = normalize_ip_address(varBinds[2][1])
+                next_hop = normalize_ip_address(varBinds[1][1])
+                mask = normalize_ip_address(varBinds[2][1])
                 if_index = str(varBinds[3][1])
                 
                 route_count += 1

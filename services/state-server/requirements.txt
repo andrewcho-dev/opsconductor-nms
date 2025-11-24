@@ -7,3 +7,4 @@ pydantic-settings==2.4.0
 jsonpatch==1.33
 python-json-logger==2.0.7
 httpx==0.27.0
+pysnmp==7.1.17

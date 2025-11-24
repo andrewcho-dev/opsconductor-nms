@@ -1,5 +1,5 @@
 import os
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
 DATABASE_URL = os.getenv(
@@ -26,5 +26,25 @@ def get_db():
 
 def init_db():
     """Initialize database tables."""
-    from models import Base
+    from .models import Base
     Base.metadata.create_all(bind=engine)
+    _ensure_cli_credentials_column()
+
+
+def _ensure_cli_credentials_column():
+    """Ensure discovery_runs has cli_default_credentials column for older DBs."""
+    inspector = inspect(engine)
+    if "discovery_runs" not in inspector.get_table_names():
+        return
+
+    columns = {col["name"] for col in inspector.get_columns("discovery_runs")}
+    if "cli_default_credentials" in columns:
+        return
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "ALTER TABLE discovery_runs "
+                "ADD COLUMN cli_default_credentials JSONB NOT NULL DEFAULT '[]'::jsonb"
+            )
+        )

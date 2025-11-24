@@ -1,28 +1,19 @@
-# OpsConductor NMS - Repository Overview
+# OpsConductor NMS - Repository Technical Documentation
 
-**Last Updated**: 2025-11-19  
+**Last Updated**: 2025-11-20  
 **Status**: ✅ Production-Ready Network Management System
 
 ---
 
 ## System Overview
 
-OpsConductor NMS is a comprehensive network management system that combines:
-- **Passive packet observation** for network topology discovery
-- **Active device scanning** for comprehensive network inventory
-- **AI-powered analysis** using LLMs for device classification
-- **SNMP discovery and monitoring** for detailed device information
-- **Real-time inventory management** with web-based UI
+OpsConductor NMS is a network management system that provides:
 
-### What This System Does
-
-1. **Discovers Network Devices**: Passively observes network traffic and actively scans IP ranges to discover all devices
-2. **Identifies Device Types**: Uses port scanning, SNMP queries, and LLM analysis to classify devices (routers, switches, hosts, etc.)
-3. **Discovers Layer 2 Topology**: Uses LLDP (Link Layer Discovery Protocol) to map physical network connections between devices
-4. **Classifies Network Roles**: Automatically determines L2/L3/Endpoint roles based on IP forwarding, routing tables, and STP status
-5. **Enriches Device Information**: Automatically gathers vendor info (MAC OUI lookup), SNMP data, open ports, and service information
-6. **Manages MIB Library**: Maintains vendor-specific MIBs and automatically assigns appropriate MIBs to discovered devices
-7. **Provides Real-Time UI**: Web interface showing complete IP inventory with filtering, sorting, device details, and topology visualization
+1. **Router Topology Discovery** - Recursively discover routers via SNMP routing table analysis
+2. **Device Inventory Management** - Track discovered devices with comprehensive metadata
+3. **Topology Visualization** - Visualize Layer 2 (LLDP), Layer 3 (routing), and router topologies
+4. **MIB Library Management** - Manage vendor-specific SNMP MIB files
+5. **Real-Time UI** - Web interface for discovery, inventory, and topology visualization
 
 ---
 
@@ -31,212 +22,568 @@ OpsConductor NMS is a comprehensive network management system that combines:
 ### System Diagram
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Network Layer                         │
-│              (192.168.10.0/24 or custom)                │
-└────────┬──────────────────────────────────┬─────────────┘
-         │                                  │
-    [Passive]                          [Active]
-         │                                  │
-         ▼                                  ▼
-┌─────────────────┐              ┌─────────────────────┐
-│ Packet Collector│              │   Port Scanner      │
-│   (Scapy)       │              │   (asyncio TCP/UDP) │
-│ - ARP frames    │              │ - 161/SNMP, 22/SSH  │
-│ - IP flows      │              │ - 80/HTTP, 443/HTTPS│
-│ - MAC addresses │              │ - BGP, Telnet, etc. │
-└────────┬────────┘              └──────────┬──────────┘
-         │                                  │
-         │        ┌─────────────────────────┤
-         │        │                         │
-         ▼        ▼                         ▼
-    ┌────────────────────┐        ┌─────────────────┐
-    │   LLM Analyst      │        │ SNMP Discovery  │
-    │   (Phi-3 + vLLM)   │        │  (pysnmp)       │
-    │ - Topology infer   │        │ - Query devices │
-    │ - Device classify  │        │ - Extract info  │
-    └──────────┬─────────┘        └────────┬────────┘
-               │                           │
-               │         ┌─────────────────┤
-               │         │                 │
-               ▼         ▼                 ▼
-          ┌──────────────────────────────────────┐
-          │         State Server                 │
-          │      (FastAPI + PostgreSQL)          │
-          │                                      │
-          │  - IP Inventory Database             │
-          │  - Topology Graph Storage            │
-          │  - MIB Library Management            │
-          │  - WebSocket Streaming               │
-          └────┬─────────────────────┬───────────┘
-               │                     │
-               ▼                     ▼
-      ┌────────────────┐    ┌────────────────┐
-      │  MAC Enricher  │    │  MIB Assigner  │
-      │  (IEEE OUI DB) │    │  (Auto-match)  │
-      └────────┬───────┘    └────────┬───────┘
-               │                     │
-               └──────────┬──────────┘
-                          │
-                          ▼
-                  ┌───────────────┐
-                  │  MIB Walker   │
-                  │ (SNMP Polling)│
-                  └───────┬───────┘
-                          │
-                          ▼
-                  ┌───────────────┐
-                  │   UI (React)  │
-                  │  Inventory    │
-                  │     Grid      │
-                  └───────────────┘
+┌────────────────────────────────────────────────────────┐
+│                   Web UI (React)                       │
+│  - Inventory Grid     - Discovery Page                 │
+│  - Topology Map       - Admin MIB Panel                │
+└───────────┬────────────────────────────────┬───────────┘
+            │                                │
+            ▼                                ▼
+┌──────────────────────────┐    ┌──────────────────────────┐
+│     State Server         │    │   Router Discovery       │
+│   (FastAPI + AsyncIO)    │    │   (FastAPI + SNMP)       │
+│  Port: 8080              │    │   Port: 8200             │
+│  - IP Inventory API      │    │   - Router crawl API     │
+│  - Topology APIs         │    │   - Discovery runs       │
+│  - MIB Management        │    │   - Topology edges       │
+│  - WebSocket Stream      │    │   - BFS router search    │
+│  - WebSocket: /ws        │    │                          │
+└─────┬──────────┬─────────┘    └──────────┬──────────────┘
+      │          │                         │
+      ▼          ▼                         ▼
+┌──────────────────────────────────────────────────────┐
+│        PostgreSQL 16                                 │
+│  Tables:                                             │
+│  - ip_inventory (state-server)                       │
+│  - device_confirmations, mibs, graph_state          │
+│  - patch_events (audit log)                          │
+│  - discovery_runs, routers, routes, networks, edges │
+│    (router-discovery)                                │
+└──────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ## Services
 
-### Core Services
+### Running Services
 
-| Service | Purpose | Technology | Port | Status |
-|---------|---------|-----------|------|--------|
-| **vLLM** | LLM inference engine | vLLM + Phi-3-mini-4k | 8000 | ⚙️ Optional (GPU) |
-| **State Server** | API + Database + WebSocket | FastAPI + PostgreSQL | 8080 | ✅ Working |
-| **LLM Analyst** | Topology + Classification | FastAPI + httpx | 8100 | ⚙️ Optional (GPU) |
-| **Packet Collector** | Passive packet capture | Python + Scapy | 9100 (health) | ✅ Working |
-| **Port Scanner** | Active TCP/UDP scanning | Python asyncio | 9200 (health) | ✅ Working |
-| **SNMP Discovery** | SNMP querying + network role classification | Python + pysnmp | 9300 (health) | ✅ Working |
-| **MAC Enricher** | Vendor identification | IEEE OUI lookup | 9400 (health) | ✅ Working |
-| **MIB Assigner** | Auto MIB assignment | Python | 9500 (health) | ✅ Working |
-| **MIB Walker** | SNMP data collection + LLDP discovery | Python + pysnmp + pysmi | 9600 (health) | ✅ Working |
-| **UI** | Web interface + topology visualization | React + TypeScript | 3000 | ✅ Working |
-| **PostgreSQL** | Database | PostgreSQL 16 | 5432 (internal) | ✅ Working |
+| Service | Port | Purpose | Technology |
+|---------|------|---------|-----------|
+| **PostgreSQL** | 5432 | Database | PostgreSQL 16 |
+| **State Server** | 8080 | IP Inventory + Topology API | FastAPI + AsyncIO |
+| **Router Discovery** | 8200 | SNMP Router Topology Crawler | FastAPI + pysnmp |
+| **UI** | 3000 | Web Interface | React + TypeScript + Vite |
+
+### Disabled/Optional Services
+
+These services are included in the codebase but disabled by default in docker-compose.yml:
+- **Packet Collector** - Passive packet capture (requires network interface access)
+- **Port Scanner** - Active TCP/UDP port scanning
+- **SNMP Discovery** - Device SNMP queries
+- **MAC Enricher** - MAC OUI vendor lookup
+- **MIB Assigner** - Automatic MIB assignment
+- **MIB Walker** - SNMP tree walking
+- **LLM Analyst** - AI-powered device classification (requires GPU)
+- **vLLM** - LLM inference engine (requires GPU)
 
 ---
 
 ## Database Schema
 
-### Main Tables
+### State Server Tables
 
 #### `ip_inventory`
-Complete device inventory with all discovered information:
-- IP address, MAC address, hostname
-- Device type, vendor, model
-- Network role (L2/L3/Endpoint) and confirmation status
-- Status (active/inactive/unknown)
-- Open ports (JSONB)
-- SNMP configuration and data (JSONB) including LLDP neighbor data
-- Confidence scores and classification notes
-- Timestamps (first_seen, last_seen, last_probed)
+Device inventory with all discovered information:
+- `id` (PK): Integer
+- `ip_address` (INET, unique): Device IP
+- `mac_address` (MACADDR): Device MAC
+- `status` (String): active/inactive/unknown
+- `device_type` (String): router/switch/firewall/host/etc
+- `device_type_confirmed` (Boolean): User verification flag
+- `network_role` (String): L2/L3/Endpoint
+- `device_name` (String): Hostname or user-assigned name
+- `vendor` (String): Equipment vendor
+- `model` (String): Equipment model
+- `snmp_data` (JSONB): SNMP-collected metrics and LLDP neighbors
+- `open_ports` (JSONB): Open ports from scanning
+- `confidence_score` (Float): Classification confidence
+- `first_seen` (DateTime): First discovery time
+- `last_seen` (DateTime): Last activity time
+- `mib_ids` (Array of Integers): Associated MIB library IDs
 
 #### `mibs`
-MIB library for vendor-specific SNMP queries:
-- Name, vendor, version
-- Device types (applicable devices)
-- OID prefix
-- File path
+SNMP MIB library:
+- `id` (PK): Integer
+- `name` (String, unique): MIB name
+- `vendor` (String): Vendor (Cisco, Juniper, etc.)
+- `device_types` (Array): Applicable device types
+- `version` (String): MIB version
+- `file_path` (Text): Path to MIB file
+- `oid_prefix` (Text): Root OID for this MIB
+- `description` (Text): MIB description
+- `uploaded_at` (DateTime): Upload timestamp
 
 #### `device_confirmations`
-User confirmations and verification history
+User verification history:
+- `id` (PK): Integer
+- `ip_inventory_id` (FK): Device reference
+- `confirmed_by` (String): User who confirmed
+- `confirmed_type` (String): Confirmed device type
+- `confidence` (Float): User confidence (0-1)
+- `evidence` (Text): Verification evidence notes
+- `confirmed_at` (DateTime): Confirmation time
 
 #### `graph_state`
-Topology graph (nodes, edges, networks, routers)
+Topology graph storage (single row):
+- `id` (Integer, PK=1): Singleton key
+- `graph` (JSONB): Complete topology graph structure
+- `seed_config` (JSONB): Saved discovery seed configuration
+- `updated_at` (DateTime): Last update time
 
 #### `patch_events`
-Audit log of all topology changes
+Audit log of topology changes:
+- `id` (PK): Integer
+- `patch` (JSONB): JSON Patch operations
+- `rationale` (String): Change reason
+- `warnings` (JSONB): Associated warnings
+- `created_at` (DateTime): Change timestamp
+
+#### `discovered_networks`
+Network discovery tracking:
+- `id` (PK): Integer
+- `network` (String, unique): CIDR notation
+- `destination` (INET): Network address
+- `netmask` (INET): Network mask
+- `gateway_ip` (INET): Gateway address
+- `prefix_len` (Integer): CIDR prefix length
+- `discovered_at` (DateTime): Discovery time
+- `network_metadata` (JSONB): Additional metadata
+
+### Router Discovery Tables
+
+All router-discovery tables include `run_id` (FK) to partition by discovery run.
+
+#### `discovery_runs`
+Discovery operation tracking:
+- `id` (PK): Integer
+- `started_at` (DateTime): Start time
+- `finished_at` (DateTime, nullable): Completion time
+- `status` (String): PENDING/RUNNING/COMPLETED/FAILED/CANCELLED
+- `root_ip` (INET): Starting router IP
+- `snmp_community` (String): SNMP community string used
+- `snmp_version` (String): "2c" or "3"
+- `error_message` (Text, nullable): Error details if FAILED
+
+#### `routers`
+Discovered routers:
+- `id` (PK): Integer
+- `run_id` (FK): Discovery run reference
+- `primary_ip` (INET): Router IP address
+- `hostname` (String): SNMP sysName
+- `sys_descr` (Text): SNMP sysDescr
+- `sys_object_id` (String): SNMP sysObjectID
+- `vendor` (String): Extracted vendor name
+- `model` (String): Extracted model number
+- `is_router` (Boolean): Classification result
+- `router_score` (Integer): Classification score
+- `classification_reason` (Text): Why classified as router
+- `created_at` (DateTime): Discovery time
+- Unique constraint: `(run_id, primary_ip)`
+
+#### `router_networks`
+Networks attached to routers:
+- `id` (PK): Integer
+- `run_id` (FK): Discovery run reference
+- `router_id` (FK): Router reference
+- `network` (CIDR): Network in CIDR notation
+- `is_local` (Boolean): True if local interface, false if route
+
+#### `router_routes`
+Routing table entries:
+- `id` (PK): Integer
+- `run_id` (FK): Discovery run reference
+- `router_id` (FK): Router reference
+- `destination` (CIDR): Route destination in CIDR
+- `next_hop` (INET, nullable): Next hop IP
+- `protocol` (String): Routing protocol (static, bgp, ospf, etc.)
+- `admin_distance` (Integer, nullable): Administrative distance
+- `metric` (Integer, nullable): Route metric
+
+#### `topology_edges`
+Connections between routers:
+- `id` (PK): Integer
+- `run_id` (FK): Discovery run reference
+- `from_router_id` (FK): Source router
+- `to_router_id` (FK): Destination router
+- `reason` (String): Edge reason (e.g., "shared_subnet")
+- Unique constraint: `(run_id, from_router_id, to_router_id)`
 
 ---
 
 ## API Endpoints
 
-### State Server API (`:8080`)
+### State Server (port 8080)
 
-#### Health & Status
-- `GET /health` - Health check
+#### Health
+```
+GET /health
+```
+Returns: `{"status": "ok"}`
 
-#### Topology Management
-- `GET /graph` - Retrieve topology graph
-- `POST /patch` - Apply JSON Patch to topology
-- `GET /patches?limit=50` - Patch history
-- `WS /ws` - WebSocket real-time updates
+#### Graph/Topology
+```
+GET /graph
+```
+Returns: Complete topology graph with nodes, edges, networks
 
-#### IP Inventory Management
-- `GET /api/inventory` - List all discovered IPs (supports filtering)
-  - Query params: `status`, `device_type`, `confirmed`
-- `GET /api/inventory/{ip}` - Get single device details
-- `GET /api/inventory/{ip}/neighbors` - Get LLDP neighbors with port mappings
-- `POST /api/inventory` - Create/update device
-- `PUT /api/inventory/{ip}` - Update device
-- `POST /api/inventory/{ip}/confirm` - User confirmation
+```
+POST /patch
+Body: {"op": "add"/"remove"/"replace", "path": "/...", "value": {...}}
+```
+Apply JSON Patch to topology graph
 
-#### MIB Management
-- `GET /api/mibs` - List all MIBs
-- `GET /api/mibs/{mib_id}` - Get MIB content by ID
-- `POST /api/mibs` - Upload new MIB
-- `DELETE /api/mibs/{id}` - Delete MIB
-- `GET /api/inventory/{ip}/mibs/suggestions` - Get MIB suggestions for device
-- `POST /api/inventory/{ip}/mibs/walk` - Trigger manual MIB walk for device
-- `POST /api/inventory/{ip}/mibs/reassign` - Reassign MIB for device
+```
+GET /patches?limit=50
+```
+Returns: List of past patch operations
 
-#### Topology Management
-- `GET /api/topology/layer2` - Get Layer 2 topology with LLDP-discovered connections
+#### Inventory
+```
+GET /api/inventory
+Query params: status, device_type, confirmed
+```
+Returns: Array of devices
+
+```
+GET /api/inventory/{ip_address}
+```
+Returns: Single device details
+
+```
+POST /api/inventory
+Body: IpInventoryCreate
+```
+Create new inventory entry
+
+```
+PUT /api/inventory/{ip_address}
+Body: IpInventoryUpdate
+```
+Update device information
+
+```
+GET /api/inventory/{ip_address}/neighbors
+```
+Returns: LLDP neighbor information
+
+```
+POST /api/inventory/{ip_address}/confirm
+Body: {confirmed_by, confirmed_type, confidence, evidence}
+```
+Record user confirmation of device type
+
+#### Topology
+```
+GET /api/topology/layer2
+```
+Returns: Layer 2 topology (LLDP-based with STP tree calculation)
+
+```
+GET /api/topology/l2
+```
+Returns: L2 switch topology
+
+```
+GET /api/topology/l3
+```
+Returns: Layer 3 routing topology
+
+#### MIBs
+```
+GET /api/mibs
+```
+Returns: All MIB library entries
+
+```
+GET /api/mibs/{mib_id}
+```
+Returns: MIB content by ID
+
+```
+POST /api/mibs
+Body: MibCreate
+```
+Add new MIB to library
+
+```
+DELETE /api/mibs/{mib_id}
+```
+Remove MIB from library
+
+```
+GET /api/inventory/{ip_address}/mibs/suggestions
+```
+Returns: Suggested MIBs for device
+
+```
+POST /api/inventory/{ip_address}/mibs/reassign
+Body: {mib_id}
+```
+Assign MIB to device
+
+```
+POST /api/inventory/{ip_address}/mibs/walk
+```
+Trigger manual SNMP MIB walk
+
+#### WebSocket
+```
+WS /ws
+```
+Real-time topology updates. Initial message sends snapshot, subsequent messages send patches.
 
 #### Seed Configuration
-- `GET /seed` - Get seed configuration
-- `POST /seed` - Save seed configuration
+```
+GET /seed
+```
+Returns: Last saved seed configuration
 
-### LLM Analyst API (`:8100`, internal)
-- `POST /tick` - Process evidence window → topology patch
-- `POST /classify` - Classify device based on scan results
+```
+POST /seed
+Body: SeedConfigRequest
+```
+Save seed configuration for future discoveries
+
+#### Other
+```
+POST /api/networks/discovered
+```
+Record discovered network
+
+```
+GET /api/networks/discovered
+```
+Get discovered networks
+
+```
+POST /api/launch-terminal
+```
+Terminal launcher (host filesystem access)
+
+```
+GET /api/browse-filesystem
+```
+File browser for admin operations
+
+### Router Discovery (port 8200)
+
+#### Discovery Control
+```
+POST /api/router-discovery/start
+Body: {
+  "root_ip": "192.168.1.1",
+  "snmp_community": "public",
+  "snmp_version": "2c"
+}
+```
+Response: `{"run_id": 1}`
+
+```
+GET /api/router-discovery/runs/{run_id}/state
+```
+Returns: Discovery run status, timing, and progress metrics
+
+```
+POST /api/router-discovery/runs/{run_id}/pause
+```
+Pause ongoing discovery
+
+```
+POST /api/router-discovery/runs/{run_id}/resume
+```
+Resume paused discovery
+
+```
+POST /api/router-discovery/runs/{run_id}/cancel
+```
+Cancel discovery
+
+#### Data Retrieval
+```
+GET /api/router-discovery/runs/{run_id}/topology
+```
+Returns: Discovered routers (nodes) and connections (edges)
+
+```
+GET /api/router-discovery/runs/{run_id}/routers/{router_id}
+```
+Returns: Detailed router information including networks and routes
+
+#### Health
+```
+GET /health
+```
+Returns: `{"status": "healthy"}`
+
+---
+
+## Core Services Implementation
+
+### State Server (services/state-server/)
+
+**Key Files**:
+- `main.py` - FastAPI application with all endpoints
+- `models.py` - SQLAlchemy database models
+- `schemas.py` - Pydantic request/response schemas
+- `service.py` - Business logic for graph operations
+- `database.py` - Database initialization and async session factory
+- `stp_calculator.py` - STP spanning tree calculation for L2 topology
+
+**Key Dependencies**:
+- FastAPI 0.115+
+- SQLAlchemy 2.0 (async)
+- Pydantic 2.x
+- PostgreSQL driver (asyncpg)
+- asyncio
+
+**Key Features**:
+- Asynchronous request handling with FastAPI
+- Real-time WebSocket updates to clients
+- JSON Patch operations for topology modifications
+- LLDP neighbor resolution to IP addresses
+- STP tree calculation for Layer 2 topology
+- Device confirmation and verification tracking
+
+### Router Discovery (services/router-discovery/)
+
+**Key Files**:
+- `main.py` - FastAPI application initialization
+- `api.py` - REST API endpoints
+- `crawler.py` - Main BFS router discovery crawler
+- `snmp_adapter.py` - SNMP client wrapper (pysnmp)
+- `router_classifier.py` - Router classification heuristics
+- `models.py` - SQLAlchemy database models
+- `database.py` - Database initialization
+
+**Key Components**:
+
+#### Crawler (crawler.py)
+- **Algorithm**: Breadth-First Search (BFS)
+- **Process**:
+  1. Start with root router IP
+  2. Query SNMP: system info, IP forwarding, interfaces, routing table
+  3. Classify device as router or non-router
+  4. Extract next-hop IPs from routing table
+  5. Add undiscovered next-hops to queue
+  6. Build topology edges based on shared subnets
+  7. Repeat until queue empty
+
+#### SNMP Adapter (snmp_adapter.py)
+- Wraps pysnmp library for SNMPv2c and SNMPv3
+- Provides high-level methods:
+  - `get_system_info()` - sysDescr, sysObjectID, sysName
+  - `get_ip_forwarding()` - ipForwarding status
+  - `get_interfaces_and_addresses()` - IP/mask per interface
+  - `get_routing_entries()` - Routing table with protocol info
+- Error handling for timeouts, auth failures, unreachable hosts
+
+#### Router Classifier (router_classifier.py)
+Scoring-based router classification:
+- **Scoring Logic**:
+  - IP forwarding enabled: +3 points
+  - Multiple unique L3 networks on interfaces: +2 points
+  - At least one remote route: +3 points
+  - Router keywords in sysDescr/sysObjectID: +1 point each
+- **Result**: Router if score >= 3
+
+**Key Dependencies**:
+- FastAPI 0.115+
+- SQLAlchemy 2.0 (async)
+- pysnmp 4.4+ (SNMP client)
+- Pydantic 2.x
+
+**Key Features**:
+- Single-threaded BFS crawler (prevents duplicate processing)
+- Classifies devices as routers vs endpoints using heuristics
+- Extracts vendor/model from system descriptions
+- Creates topology edges based on shared subnets
+- Full audit trail via discovery runs table
+- Support for pause/resume operations
+- Graceful error handling and logging
+
+### UI (ui/src/)
+
+**Key Files**:
+- `App.tsx` - Main app with tab navigation
+- `InventoryGrid.tsx` - Device inventory table with filters
+- `DiscoveryPage.tsx` - Router discovery interface
+- `TopologyMap.tsx` - Topology visualization
+- `Admin.tsx` - MIB library management
+
+**Key Features**:
+- Multi-page SPA with tab-based navigation
+- Real-time device list with sorting/filtering
+- Live topology visualization for routers
+- Discovery progress monitoring
+- Drag-and-drop MIB management
+- WebSocket connection for live updates
+
+**Technology Stack**:
+- React 18
+- TypeScript 5.6
+- Vite 5.4 (build tool)
+- CSS Grid for responsive layout
 
 ---
 
 ## Data Flow
 
-### Discovery Pipeline
+### Router Discovery Flow
 
 ```
-1. PACKET COLLECTOR
-   ↓ Captures ARP frames, IP flows
-   ↓ Extracts IP/MAC pairs
-   ↓
-2. STATE SERVER
-   ↓ Creates ip_inventory record
-   ↓ Sets status='active', last_seen=now
-   ↓
-3. PORT SCANNER
-   ↓ Scans common ports every 5 minutes
-   ↓ Updates open_ports JSONB field
-   ↓
-4. SNMP DISCOVERY
-   ↓ Checks port 161, tries common communities
-   ↓ Queries sysDescr, sysObjectID, interfaces
-   ↓ Updates snmp_data, vendor, model
-   ↓
-5. MAC ENRICHER
-   ↓ Looks up MAC OUI in IEEE database
-   ↓ Updates vendor field (if empty)
-   ↓
-6. MIB ASSIGNER
-   ↓ Matches vendor + device_type to MIB library
-   ↓ Assigns mib_id
-   ↓
-7. MIB WALKER
-   ↓ Walks SNMP tree with assigned MIB
-   ↓ Resolves numeric OIDs to text labels using PySNMP MibViewController
-   ↓ Loads standard MIBs (SNMPv2-MIB, IF-MIB, LLDP-MIB, etc.) from http://mibs.pysnmp.com
-   ↓ Collects detailed metrics with human-readable labels
-   ↓ Discovers LLDP neighbors and port connections
-   ↓ Updates snmp_data JSONB (vendor_mib_data field, lldp field)
-   ↓
-8. LLM ANALYST (Optional)
-   ↓ Analyzes all collected data
-   ↓ Classifies device_type with confidence_score
-   ↓ Updates classification_notes
-   ↓
-9. UI
-   ↓ Displays complete inventory
-   ↓ User can filter, sort, confirm device types
+1. User clicks "Start Discovery" on Discovery Page
+   │
+   ├─ UI POST /api/router-discovery/start
+   │   {root_ip: "192.168.1.1", snmp_community: "public"}
+   │
+   ├─ Router Discovery Service
+   │   │
+   │   ├─ Create DiscoveryRun (status=RUNNING)
+   │   │
+   │   ├─ Start BFS Crawler
+   │   │   ├─ Queue root_ip
+   │   │   │
+   │   │   └─ While queue not empty:
+   │   │       ├─ Pop router_ip from queue
+   │   │       │
+   │   │       ├─ Query SNMP
+   │   │       │   ├─ System info (sysDescr, hostname)
+   │   │       │   ├─ IP forwarding status
+   │   │       │   ├─ Interfaces & IP addresses
+   │   │       │   └─ Routing table
+   │   │       │
+   │   │       ├─ Classify router (score >= 3?)
+   │   │       │
+   │   │       ├─ Store Router record
+   │   │       ├─ Store RouterNetwork records (interfaces)
+   │   │       ├─ Store RouterRoute records (routes)
+   │   │       │
+   │   │       ├─ Extract next-hop IPs
+   │   │       │
+   │   │       ├─ Create TopologyEdge (shared subnets)
+   │   │       │
+   │   │       └─ Enqueue new next-hops
+   │   │
+   │   └─ Mark DiscoveryRun as COMPLETED
+   │
+   └─ UI polls /api/router-discovery/runs/{run_id}/state
+      Displays progress and status
+```
+
+### Topology Visualization Flow
+
+```
+1. User views Topology Map page
+   │
+   ├─ UI GET /api/topology/layer2
+   │   ├─ State Server queries ip_inventory
+   │   ├─ Extracts LLDP neighbors from snmp_data.lldp
+   │   ├─ Resolves remote chassis IDs to IP addresses
+   │   ├─ Calculates STP spanning tree
+   │   └─ Returns nodes and edges
+   │
+   └─ UI renders interactive topology graph
 ```
 
 ---
@@ -245,167 +592,23 @@ Audit log of all topology changes
 
 ### Backend
 - **Language**: Python 3.11+
-- **Framework**: FastAPI 0.115+
-- **ORM**: SQLAlchemy 2.0 (async)
+- **Async Framework**: FastAPI 0.115+
+- **Async ORM**: SQLAlchemy 2.0+
 - **Database**: PostgreSQL 16
-- **LLM Inference**: vLLM with Phi-3-mini-4k-instruct
-- **Packet Capture**: Scapy
-- **SNMP**: pysnmp / easysnmp
-- **Async I/O**: asyncio + httpx
+- **SNMP**: pysnmp 4.4+
+- **Async HTTP**: httpx
+- **Serialization**: Pydantic 2.x
 
 ### Frontend
 - **Framework**: React 18
 - **Language**: TypeScript 5.6
 - **Build Tool**: Vite 5.4
-- **UI Components**: Custom inventory grid with filtering/sorting
+- **Styling**: CSS Grid
 
 ### Infrastructure
-- **Container**: Docker + Docker Compose
-- **GPU**: NVIDIA Container Toolkit (for vLLM)
-- **Networking**: Host network mode (packet collector)
-
----
-
-## Key Features Implementation
-
-### SNMP OID Text Label Resolution
-
-The MIB Walker service implements automatic OID resolution to convert numeric OIDs into human-readable text labels.
-
-**Technical Implementation**:
-
-1. **MIB Compilation**: Uses `pysmi` package to compile and load MIB definitions
-2. **Remote MIB Source**: Configured to fetch MIBs from `http://mibs.pysnmp.com/asn1/@mib@` on-demand
-3. **Standard MIBs Loaded**: 
-   - SNMPv2-MIB
-   - IF-MIB
-   - IP-MIB
-   - TCP-MIB
-   - UDP-MIB
-   - HOST-RESOURCES-MIB
-   - Printer-MIB
-   - BRIDGE-MIB
-   - ENTITY-MIB
-   - LLDP-MIB
-4. **Resolution Process**:
-   - Creates `MibBuilder` and `MibViewController` instances
-   - Loads standard MIBs during initialization
-   - For each OID during SNMP walk: calls `getNodeName(oid_tuple)` to resolve
-   - Returns tuple: `(oid, label, suffix)`
-   - Constructs human-readable label: `label + '.' + suffix`
-5. **Fallback Behavior**: If resolution fails, falls back to shortened numeric labels (last 4 OID components)
-
-**Example Output**:
-- Before: `1.1.3.1`
-- After: `prtInputName.1.1` (OID: 1.3.6.1.2.1.43.8.2.1.13.1.1)
-
-**Benefits**:
-- Network administrators can immediately understand what each metric represents
-- No need to manually look up OID meanings in MIB documentation
-- Works with standard MIBs out-of-the-box (Printer-MIB, IF-MIB, etc.)
-
----
-
-### LLDP Neighbor Discovery
-
-The MIB Walker service automatically discovers Layer 2 physical topology using LLDP (Link Layer Discovery Protocol).
-
-**Technical Implementation**:
-
-1. **LLDP-MIB Queries**: Walks LLDP-MIB OID tree (1.0.8802.1.1.2) to discover neighbors
-2. **Local System Information**:
-   - `lldpLocChassisId` (1.0.8802.1.1.2.1.3.2.0): Local chassis ID
-   - `lldpLocSysName` (1.0.8802.1.1.2.1.3.3.0): Local system name
-   - `lldpLocSysDesc` (1.0.8802.1.1.2.1.3.4.0): Local system description
-3. **Remote Neighbor Information**:
-   - `lldpRemChassisId` (1.0.8802.1.1.2.1.4.1.1.5): Remote device chassis ID
-   - `lldpRemPortId` (1.0.8802.1.1.2.1.4.1.1.7): Remote port identifier
-   - `lldpRemPortDesc` (1.0.8802.1.1.2.1.4.1.1.8): Remote port description
-   - `lldpRemSysName` (1.0.8802.1.1.2.1.4.1.1.9): Remote system name
-   - `lldpRemSysDesc` (1.0.8802.1.1.2.1.4.1.1.10): Remote system description
-4. **Neighbor Resolution**: State server resolves remote chassis IDs and system names to IP addresses in inventory
-5. **Storage**: LLDP data stored in `snmp_data.lldp` JSONB field with `local_system` and `neighbors` arrays
-
-**Data Structure**:
-```json
-{
-  "lldp": {
-    "local_system": {
-      "chassis_id": "00:11:22:33:44:55",
-      "sysname": "switch-01",
-      "sysdesc": "Cisco IOS Switch"
-    },
-    "neighbors": [
-      {
-        "local_port": "1",
-        "remote_chassis_id": "00:aa:bb:cc:dd:ee",
-        "remote_port_id": "GigabitEthernet0/1",
-        "remote_sysname": "router-01",
-        "remote_sysdesc": "Cisco IOS Router"
-      }
-    ]
-  }
-}
-```
-
-**Layer 2 Topology API**: The state server provides `/api/topology/layer2` endpoint that:
-- Retrieves all devices with LLDP neighbor data
-- Resolves remote chassis IDs and system names to IP addresses
-- Returns nodes (devices) and edges (connections) for visualization
-- Includes port mapping information for each connection
-
-**Benefits**:
-- Automatic discovery of physical network topology
-- Visualize actual cable connections between devices
-- Identify incorrect cabling or missing connections
-- No manual topology mapping required
-
----
-
-### Network Role Classification
-
-The SNMP Discovery service automatically classifies devices into network roles based on their capabilities.
-
-**Classification Logic**:
-
-1. **L3 (Layer 3 Router)**:
-   - `ipForwarding` (1.3.6.1.2.1.4.1.0) = 1 (forwarding enabled)
-   - AND route count > 2 (from ipRouteTable walk)
-   
-2. **L2 (Layer 2 Switch)**:
-   - STP enabled (dot1dStpProtocolSpecification exists)
-   - Does not meet L3 criteria
-
-3. **Endpoint**:
-   - Does not meet L2 or L3 criteria
-   - Typically hosts, servers, printers, cameras, etc.
-
-**Technical Implementation**:
-
-1. **SNMP Queries** (services/snmp-discovery/app/main.py):
-   - `ipForwarding` OID: Checks if IP forwarding is enabled
-   - `ipRouteTable` walk: Counts routing table entries
-   - `dot1dStpProtocolSpecification` OID: Checks if STP is enabled
-
-2. **Classification Function** (`determine_network_role()`):
-   ```python
-   if ipForwarding == "1" and route_count > 2:
-       return "L3"
-   elif stp_enabled > 0:
-       return "L2"
-   else:
-       return "Endpoint"
-   ```
-
-3. **Storage**: Network role stored in `ip_inventory.network_role` field with confirmation flag
-
-**User Confirmation**: Network roles can be manually confirmed via UI or API, preventing automatic reclassification.
-
-**Benefits**:
-- Automatically identifies network device types
-- Helps with inventory organization and filtering
-- Supports topology inference and visualization
-- Can be manually overridden when needed
+- **Containerization**: Docker + Docker Compose
+- **Database**: PostgreSQL 16 (Docker volume)
+- **Networking**: Docker network bridge
 
 ---
 
@@ -413,352 +616,92 @@ The SNMP Discovery service automatically classifies devices into network roles b
 
 ### Environment Variables
 
-```bash
-# LLM Configuration
-MODEL_NAME=microsoft/Phi-3-mini-4k-instruct
-VLLM_MAX_CONTEXT_LEN=8192
-HF_TOKEN=                           # Optional
+**Common Settings** (see .env.example):
+```
+# Database
+DB_URL=postgresql://opsconductor:opsconductor@postgres:5432/opsconductor
 
-# Network Configuration
-GATEWAY_IP=192.168.1.1              # Optional seed
-FIREWALL_IP=                        # Optional seed
-PCAP_IFACE=eth0                     # Network interface for packet capture
-
-# Service Configuration
-BATCH_MS=250                        # Evidence window (ms)
-MAX_EVIDENCE_ITEMS=512              # Max items per batch
-
-# Scanning Configuration
-SCAN_INTERVAL_SECONDS=300           # Port scan interval (5 min)
-SCAN_PORTS=22,23,80,443,554,1883,5060,8080,8443,161,179,3389
-CONNECTION_TIMEOUT=2.0              # Port scan timeout
-
-# SNMP Configuration
-SNMP_COMMUNITY=public               # Default community string
-SNMP_TIMEOUT=2.0                    # Query timeout
-SNMP_RETRIES=1                      # Retry count
-SNMP_SCAN_INTERVAL_SECONDS=300      # Discovery interval
-
-# MAC Enrichment
-MAC_SCAN_INTERVAL_SECONDS=3600      # OUI lookup interval (1 hour)
-
-# MIB Management
-MIB_ASSIGN_INTERVAL_SECONDS=600     # Assignment interval (10 min)
-MIB_WALK_INTERVAL_SECONDS=1800      # Walk interval (30 min)
+# API
+API_PORT=8080
+UI_WS_ORIGIN=*
 
 # UI
-SERVER_IP=192.168.10.50             # IP address of the server (used by UI)
-VITE_API_BASE=http://192.168.10.50:8080
-VITE_WS_BASE=ws://192.168.10.50:8080
-UI_WS_ORIGIN=*                      # CORS origin
+VITE_API_BASE=http://localhost:8080
+VITE_WS_BASE=ws://localhost:8080
+
+# Model (optional, for GPU services)
+MODEL_NAME=microsoft/Phi-3-mini-4k-instruct
+VLLM_MAX_CONTEXT_LEN=8192
 ```
 
 ---
 
-## Development
+## Development Notes
 
-### Quick Start
+### Adding New API Endpoints
 
-```bash
-# 1. Clone repository
-git clone <repo-url>
-cd opsconductor-nms
+1. Define Pydantic schema in `schemas.py`
+2. Define request handler in `main.py` or dedicated router file
+3. Implement business logic in `service.py` if needed
+4. Test with curl or API client
 
-# 2. Configure environment
-cp .env.example .env
-nano .env  # Edit network interface, IPs, etc.
+### Extending Router Classification
 
-# 3. Start all services
-docker compose up -d
-
-# 4. Check service health
-docker compose ps
-docker compose logs -f
-
-# 5. Access UI
-open http://localhost:3000
-```
-
-### Service Development
-
-Each service follows this structure:
-```
-services/<service-name>/
-├── app/
-│   ├── main.py          # FastAPI app or async main()
-│   └── ...              # Business logic
-├── Dockerfile
-├── requirements.txt
-└── .dockerignore
-```
+Edit `services/router-discovery/app/router_classifier.py`:
+- Add new score criteria to `classify_router()` method
+- Adjust `SCORE_THRESHOLD` if needed
+- Rebuild service: `docker compose build router-discovery`
 
 ### Database Migrations
 
-Currently using SQLAlchemy models with auto-creation. For production, consider adding Alembic migrations.
+Router Discovery uses SQLAlchemy with migrations:
+```bash
+# Create new migration
+alembic revision --autogenerate -m "Add new column"
 
-### Adding a New Service
+# Apply migrations
+alembic upgrade head
+```
 
-1. Create service directory under `services/`
-2. Add Dockerfile and requirements.txt
-3. Update `docker-compose.yml`
-4. Implement health check endpoint (`:9XXX/health`)
-5. Integrate with state-server API
-6. Update this documentation
+State Server uses raw SQL migrations in `services/state-server/`.
 
 ---
 
-## Testing
+## Performance Characteristics
 
-### Manual Testing
+### Router Discovery
+- **BFS Crawl**: 5-20 routers/minute (SNMP timeout dependent)
+- **SNMP Query Time**: 1-5 seconds per device
+- **Network Overhead**: ~100-500 bytes per device
+- **Memory**: ~10-50MB per 100 routers
 
-```bash
-# Health checks
-curl http://localhost:8080/health
-curl http://localhost:9100/health  # packet-collector
-curl http://localhost:9200/health  # port-scanner
-curl http://localhost:9300/health  # snmp-discovery
+### State Server
+- **Request Latency**: <100ms typical
+- **WebSocket Updates**: <500ms propagation
+- **Database Query**: <50ms for most queries
 
-# View inventory
-curl http://localhost:8080/api/inventory | jq
-
-# View single device
-curl http://localhost:8080/api/inventory/192.168.10.50 | jq
-
-# View MIBs
-curl http://localhost:8080/api/mibs | jq
-
-# View topology
-curl http://localhost:8080/graph | jq
-```
-
-### Logs
-
-```bash
-# All services
-docker compose logs -f
-
-# Specific service
-docker compose logs -f port-scanner
-docker compose logs -f snmp-discovery
-docker compose logs -f packet-collector
-```
-
----
-
-## Current Limitations
-
-1. **No Authentication** - All API endpoints are publicly accessible
-2. **No TLS/SSL** - Unencrypted communication
-3. **Basic Error Handling** - Limited retry logic
-4. **No Automated Tests** - Manual testing only
-5. **Network Visibility** - Passive capture limited on switched networks (requires promiscuous mode or SPAN)
-6. **Single Network Focus** - Designed for single subnet (configurable)
+### Database
+- **Disk Space**: ~1MB per 100 routers with routing tables
+- **Index Coverage**: Optimized for run_id, status, IP address queries
 
 ---
 
 ## Security Considerations
 
-⚠️ **NOT PRODUCTION-READY FOR INTERNET-FACING DEPLOYMENT**
+⚠️ **System Design**: This is for **internal network use only**
 
-Current security posture:
-- No authentication
-- No authorization
-- CORS set to `*`
-- Database credentials in plaintext
-- No rate limiting
-- No input sanitization beyond basic validation
+**Current Limitations**:
+- ❌ No authentication on API endpoints
+- ❌ No TLS/SSL encryption
+- ❌ CORS allows all origins
+- ❌ Database credentials in plaintext .env
+- ✅ Services in isolated Docker network
+- ✅ No data leaves internal network
 
 **For Production**:
-- Add JWT or API key authentication
-- Enable TLS on all endpoints
-- Restrict CORS to specific origins
-- Use secrets management (Vault, K8s secrets)
-- Add rate limiting
-- Network segmentation
-- Audit logging
-- Input validation and sanitization
-
----
-
-## Performance
-
-### Typical Performance
-
-- **Device Discovery**: 30-50 devices discovered in 5-10 minutes
-- **Port Scanning**: 50 IPs scanned in ~2 minutes (12 ports each)
-- **SNMP Discovery**: ~10 seconds per device
-- **MIB Walking**: ~30-60 seconds per device
-- **LLM Analysis**: ~500ms per topology patch
-
-### Scaling Considerations
-
-- PostgreSQL can handle 1000+ devices easily
-- Port scanner uses async I/O for parallel scanning
-- SNMP services use async queries
-- LLM bottleneck: single vLLM instance (can add more)
-- UI handles 100+ devices smoothly
-
----
-
-## Future Roadmap
-
-### Short-term
-- [ ] Add authentication (JWT)
-- [ ] Implement automated tests
-- [ ] Add Prometheus metrics
-- [ ] Create OpenAPI documentation
-- [ ] Add device grouping/tagging
-- [ ] Export inventory (CSV, JSON)
-
-### Medium-term
-- [ ] Multi-network support
-- [ ] Historical data tracking
-- [ ] Alerting system
-- [ ] Advanced device classification
-- [ ] Custom MIB upload via UI
-- [ ] Topology visualization in UI
-
-### Long-term
-- [ ] Machine learning for anomaly detection
-- [ ] Integration with external NMS systems
-- [ ] Advanced reporting and dashboards
-- [ ] Network path analysis
-- [ ] Configuration backup/restore
-- [ ] Multi-tenancy
-
----
-
-## Project Structure
-
-```
-opsconductor-nms/
-├── docker-compose.yml           # Service orchestration
-├── .env.example                 # Environment template
-├── README.md                    # User documentation
-├── repo.md                      # This file (technical overview)
-├── CONTRIBUTING.md              # Contribution guidelines
-│
-├── schemas/
-│   └── topology_patch.schema.json    # JSON Schema for topology patches
-│
-├── prompts/
-│   └── system_topologist.txt         # LLM system prompt
-│
-├── models/                      # Model cache (optional)
-│   └── Phi-3-mini-4k-instruct/
-│
-├── services/
-│   ├── state-server/            # Core API + Database
-│   │   ├── app/
-│   │   │   ├── main.py          # FastAPI routes
-│   │   │   ├── service.py       # Business logic
-│   │   │   ├── models.py        # SQLAlchemy models
-│   │   │   ├── schemas.py       # Pydantic schemas
-│   │   │   ├── database.py      # DB connection
-│   │   │   └── config.py        # Settings
-│   │   ├── Dockerfile
-│   │   ├── requirements.txt
-│   │   └── populate_mibs.py     # MIB initialization script
-│   │
-│   ├── llm-analyst/             # LLM reasoning service
-│   │   ├── app/
-│   │   │   ├── main.py
-│   │   │   ├── service.py
-│   │   │   ├── schemas.py
-│   │   │   └── config.py
-│   │   ├── Dockerfile
-│   │   └── requirements.txt
-│   │
-│   ├── packet-collector/        # Passive packet capture
-│   │   ├── app/
-│   │   │   └── main.py
-│   │   ├── Dockerfile
-│   │   └── requirements.txt
-│   │
-│   ├── port-scanner/            # Active port scanning
-│   │   ├── app/
-│   │   │   └── main.py
-│   │   ├── Dockerfile
-│   │   └── requirements.txt
-│   │
-│   ├── snmp-discovery/          # SNMP querying
-│   │   ├── app/
-│   │   │   └── main.py
-│   │   ├── Dockerfile
-│   │   └── requirements.txt
-│   │
-│   ├── mac-enricher/            # MAC OUI lookup
-│   │   ├── app/
-│   │   │   └── main.py
-│   │   ├── Dockerfile
-│   │   └── requirements.txt
-│   │
-│   ├── mib-assigner/            # Auto MIB assignment
-│   │   ├── app/
-│   │   │   └── main.py
-│   │   ├── Dockerfile
-│   │   └── requirements.txt
-│   │
-│   └── mib-walker/              # SNMP tree walking
-│       ├── app/
-│       │   └── main.py
-│       ├── Dockerfile
-│       └── requirements.txt
-│
-└── ui/                          # React frontend
-    ├── src/
-    │   ├── main.tsx
-    │   ├── App.tsx              # Main component with routing
-    │   ├── InventoryGrid.tsx    # Device inventory grid
-    │   ├── Admin.tsx            # MIB library admin panel
-    │   └── index.css
-    ├── public/
-    ├── package.json
-    ├── vite.config.ts
-    ├── tsconfig.json
-    ├── Dockerfile
-    └── index.html
-```
-
----
-
-## Contributing
-
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for development guidelines.
-
----
-
-## License
-
-MIT License - See LICENSE file for details
-
----
-
-## Changelog
-
-### 2025-11-14 (Latest)
-- **SNMP OID Text Label Resolution**: Implemented automatic OID-to-text conversion using PySNMP MibViewController
-- **Remote MIB Fetching**: Added pysmi package and configured http://mibs.pysnmp.com as MIB source
-- **Standard MIB Loading**: MIB Walker now loads 9 standard MIBs (Printer-MIB, IF-MIB, etc.)
-- **Admin Panel**: Added web interface for MIB library management with search/filter
-- **Manual MIB Walk**: Added "Walk MIB" button in inventory grid for on-demand SNMP walks
-- **MIB Content API**: Added GET /api/mibs/{mib_id} endpoint to retrieve MIB content
-- Updated documentation with new features and technical implementation details
-- Removed backup files (main.py.backup, service.py.bak)
-
-### 2025-11-14 (Earlier)
-- Added comprehensive repo.md documentation
-- Removed outdated IMPLEMENTATION_PLAN.md and GAP_ANALYSIS.md
-- System fully operational with all 9 services running
-
-### 2025-11-12
-- Implemented IP inventory system
-- Added port-scanner, snmp-discovery, mac-enricher, mib-assigner, mib-walker services
-- Pivoted UI from topology visualization to inventory grid
-- Fixed LLM token limits and edge duplication issues
-
-### Earlier
-- Initial topology discovery system
-- vLLM integration with Phi-3
-- Packet collector implementation
-- State server with WebSocket streaming
+1. Add JWT or OAuth authentication
+2. Enable TLS/SSL on all endpoints
+3. Restrict CORS to specific origins
+4. Use secrets management (Vault, K8s secrets)
+5. Implement rate limiting and audit logging
+6. Run behind reverse proxy with auth

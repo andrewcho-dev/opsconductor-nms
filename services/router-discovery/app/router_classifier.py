@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from ipaddress import IPv4Address, IPv4Network
 import logging
 from typing import Set, Optional
-from snmp_adapter import SystemInfo, InterfaceAddress, RouteEntry
+from .snmp_adapter import SystemInfo, InterfaceAddress, RouteEntry
 
 logger = logging.getLogger(__name__)
 

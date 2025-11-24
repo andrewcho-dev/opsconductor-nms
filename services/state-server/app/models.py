@@ -119,4 +119,4 @@ class DiscoveredNetwork(Base):
     gateway_ip = Column(INET)
     discovered_at = Column(DateTime(timezone=True), server_default=func.now())
     last_seen = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-    metadata = Column(JSONB)
+    network_metadata = Column(JSONB)

@@ -30,10 +30,15 @@ services:
   postgres:
     image: postgres:16
     environment:
+      - POSTGRES_PASSWORD=opsconductor
+      - POSTGRES_DB=opsconductor
+      - POSTGRES_USER=opsconductor
       - POSTGRES_INITDB_ARGS=-c shared_preload_libraries=pgcrypto
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./services/router-discovery/migrations/001_create_schema.sql:/docker-entrypoint-initdb.d/001_create_schema.sql
+      - ./services/init-db/001_init_topo.sql:/docker-entrypoint-initdb.d/001_init_topo.sql
+      - ./services/router-discovery/migrations/001_create_schema.sql:/docker-entrypoint-initdb.d/002_create_schema.sql
+      - ./services/router-discovery/migrations/002_add_cli_default_credentials.sql:/docker-entrypoint-initdb.d/003_add_cli_default_credentials.sql
     ports:
       - "5432:5432"
     healthcheck:
@@ -88,12 +93,6 @@ services:
     build:
       context: ./ui
       dockerfile: Dockerfile
-    environment:
-      - VITE_API_BASE=http://${SERVER_IP}:8080
-      - VITE_WS_BASE=ws://${SERVER_IP}:8080
-    volumes:
-      - ./ui/src:/app/src
-      - ./ui/index.html:/app/index.html
     ports:
       - "3000:3000"
     depends_on:
@@ -102,11 +101,11 @@ services:
 
   router-discovery:
     build:
-      context: ./services/router-discovery
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: ./services/router-discovery/Dockerfile
     environment:
       - DATABASE_URL=postgresql://opsconductor:opsconductor@postgres:5432/opsconductor
-      - LOG_LEVEL=INFO
+      - LOG_LEVEL=DEBUG
       - PORT=8000
     volumes:
       - ./services/router-discovery/app:/app/app
@@ -118,9 +117,10 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 10s
-      timeout: 3s
-      retries: 10
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   # DISABLED: packet-collector
   # packet-collector:
@@ -222,7 +222,7 @@ services:
   #   ports:
   #     - "9700:9700"
   #   depends_on:
-  #     state-server:
+  #     - state-server:
   #       condition: service_started
   #   restart: unless-stopped
 

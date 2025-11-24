@@ -1,12 +1,12 @@
 from dataclasses import dataclass
 from typing import Optional, List
 import logging
+from ipaddress import IPv4Address, IPv4Network
 from pysnmp.hlapi import (
-    getCmd, bulkCmd, SnmpEngine, CommunityData, UdpTransportTarget,
+    getCmd, bulkCmd, nextCmd, SnmpEngine, CommunityData, UdpTransportTarget,
     ContextData, ObjectType, ObjectIdentity, usmHMACMD5AuthProtocol,
     usmDESPrivProtocol, UsmUserData
 )
-from pysnmp.smi import builder, view
 
 logger = logging.getLogger(__name__)
 
@@ -38,13 +38,12 @@ class RouteEntry:
 
 
 class SnmpAdapter:
-    """Thin wrapper around SNMP operations."""
+    """Thin wrapper around SNMP operations using raw OIDs (no MIB compilation needed)."""
     
     def __init__(self, timeout: int = 5, retries: int = 2):
         self.timeout = timeout
         self.retries = retries
         self.snmp_engine = SnmpEngine()
-        self.mib_view = view.MibViewController(builder.MibBuilder())
     
     def _create_transport_target(self, target_ip: str) -> UdpTransportTarget:
         """Create UDP transport target."""
@@ -62,10 +61,24 @@ class SnmpAdapter:
         else:
             raise SnmpError(f"Unsupported SNMP version: {version}")
     
+    def _is_valid_interface_ip(self, ip_str: str) -> bool:
+        """Check if IP is a valid interface address (not network/broadcast/special)."""
+        try:
+            ip = IPv4Address(ip_str)
+            
+            if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_reserved:
+                return False
+            if ip_str in ['0.0.0.0', '255.255.255.255']:
+                return False
+            
+            return True
+        except ValueError:
+            return False
+    
     def get_system_info(self, target_ip: str, community: str, version: str) -> SystemInfo:
         """
         Query system information (hostname, description, object ID).
-        OIDs: sysName=1.3.6.1.2.1.1.5, sysDescr=1.3.6.1.2.1.1.1, sysObjectID=1.3.6.1.2.1.1.2
+        OIDs: sysName=1.3.6.1.2.1.1.5.0, sysDescr=1.3.6.1.2.1.1.1.0, sysObjectID=1.3.6.1.2.1.1.2.0
         """
         try:
             transport = self._create_transport_target(target_ip)
@@ -75,38 +88,23 @@ class SnmpAdapter:
             sys_descr = None
             sys_object_id = None
             
-            # Get sysName
             for error_indication, error_status, error_index, var_binds in getCmd(
                 self.snmp_engine, community_data, transport, ContextData(),
-                ObjectType(ObjectIdentity('SNMPv2-MIB', 'sysName', 0))
+                ObjectType(ObjectIdentity('1.3.6.1.2.1.1.1.0')),
+                ObjectType(ObjectIdentity('1.3.6.1.2.1.1.5.0')),
+                ObjectType(ObjectIdentity('1.3.6.1.2.1.1.2.0'))
             ):
                 if error_indication:
-                    logger.warning(f"SNMP sysName query failed: {error_indication}")
+                    logger.warning(f"SNMP system info query failed: {error_indication}")
                 else:
                     for name, val in var_binds:
-                        hostname = str(val)
-            
-            # Get sysDescr
-            for error_indication, error_status, error_index, var_binds in getCmd(
-                self.snmp_engine, community_data, transport, ContextData(),
-                ObjectType(ObjectIdentity('SNMPv2-MIB', 'sysDescr', 0))
-            ):
-                if error_indication:
-                    logger.warning(f"SNMP sysDescr query failed: {error_indication}")
-                else:
-                    for name, val in var_binds:
-                        sys_descr = str(val)
-            
-            # Get sysObjectID
-            for error_indication, error_status, error_index, var_binds in getCmd(
-                self.snmp_engine, community_data, transport, ContextData(),
-                ObjectType(ObjectIdentity('SNMPv2-MIB', 'sysObjectID', 0))
-            ):
-                if error_indication:
-                    logger.warning(f"SNMP sysObjectID query failed: {error_indication}")
-                else:
-                    for name, val in var_binds:
-                        sys_object_id = str(val)
+                        oid_str = str(name.prettyPrint())
+                        if '1.3.6.1.2.1.1.1.0' in oid_str:
+                            sys_descr = str(val)
+                        elif '1.3.6.1.2.1.1.5.0' in oid_str:
+                            hostname = str(val)
+                        elif '1.3.6.1.2.1.1.2.0' in oid_str:
+                            sys_object_id = str(val)
             
             return SystemInfo(hostname=hostname, sys_descr=sys_descr, sys_object_id=sys_object_id)
         
@@ -124,15 +122,18 @@ class SnmpAdapter:
             
             for error_indication, error_status, error_index, var_binds in getCmd(
                 self.snmp_engine, community_data, transport, ContextData(),
-                ObjectType(ObjectIdentity('IP-MIB', 'ipForwarding', 0))
+                ObjectType(ObjectIdentity('1.3.6.1.2.1.4.1.0'))
             ):
                 if error_indication:
                     logger.debug(f"IP forwarding query unavailable on {target_ip}")
                     return None
                 else:
                     for name, val in var_binds:
-                        # 1 = forwarding, 2 = not forwarding
-                        return int(val) == 1
+                        try:
+                            val_int = int(val)
+                            return val_int == 1
+                        except (ValueError, TypeError):
+                            return None
             
             return None
         
@@ -143,167 +144,170 @@ class SnmpAdapter:
     def get_interfaces_and_addresses(self, target_ip: str, community: str, version: str) -> List[InterfaceAddress]:
         """
         Query interface IP addresses and netmasks.
-        Walks the IP address table (RFC 1213).
+        Walks the IP address table (RFC 1213) using OID 1.3.6.1.2.1.4.20.1
         """
         addresses = []
         try:
             transport = self._create_transport_target(target_ip)
             community_data = self._create_community_data(community, version)
             
-            # Walk ipAddrTable (1.3.6.1.2.1.4.20.1)
+            address_data = {}
+            walk_count = 0
             for error_indication, error_status, error_index, var_binds in bulkCmd(
                 self.snmp_engine, community_data, transport, ContextData(),
                 0, 25,
-                ObjectType(ObjectIdentity('IP-MIB', 'ipAddrEntry'))
+                ObjectType(ObjectIdentity('1.3.6.1.2.1.4.20.1'))
             ):
                 if error_indication:
-                    logger.warning(f"SNMP bulk query failed: {error_indication}")
+                    logger.warning(f"SNMP ipAddrTable walk failed: {error_indication}")
                     break
-                else:
-                    for name, val in var_binds:
-                        # ipAddrTable contains: ipAddrAddress, ipAddrIfIndex, ipAddrNetMask, ipAddrBcastAddr, ipAddrReasmMaxSize
-                        # We're interested in ipAddrAddress (col 1) and ipAddrNetMask (col 3)
-                        oid_str = name.prettyPrint()
-                        
-                        if 'ipAddrAddress' in oid_str:
-                            ip = str(val)
-                            # Skip link-local, loopback, etc.
-                            if not ip.startswith('127.') and not ip.startswith('169.254'):
-                                # Now we need to find the netmask for this IP
-                                # For simplicity in Phase 0, we'll try to fetch it
-                                pass
-                        elif 'ipAddrNetMask' in oid_str:
-                            netmask = str(val)
-                            # Pair this with the IP we found earlier (simplified)
-                            if addresses and addresses[-1].netmask is None:
-                                addresses[-1].netmask = netmask
+                
+                for name, val in var_binds:
+                    walk_count += 1
+                    oid_str = str(name)
+                    oid_parts = oid_str.split('.')
+                    if len(oid_parts) >= 14:
+                        try:
+                            col = int(oid_parts[-5])
+                            if col not in [1, 3]:
+                                continue
+                            ip = '.'.join(oid_parts[-4:])
+                            
+                            if not self._is_valid_interface_ip(ip):
+                                continue
+                            
+                            octets = [int(o) for o in ip.split('.')]
+                            if all(0 <= o <= 255 for o in octets):
+                                if ip not in address_data:
+                                    address_data[ip] = {}
+                                if col == 1:
+                                    address_data[ip]['ip'] = ip
+                                elif col == 3:
+                                    netmask_str = str(val).strip()
+                                    if netmask_str:
+                                        try:
+                                            IPv4Address(netmask_str)
+                                            address_data[ip]['netmask'] = netmask_str
+                                        except ValueError:
+                                            pass
+                        except (ValueError, IndexError):
+                            pass
             
-            # If bulk walk didn't work well, try a simpler approach
-            if not addresses:
-                addresses = self._get_interfaces_simple(target_ip, community, version)
+            for ip, data in address_data.items():
+                netmask = data.get('netmask', '255.255.255.0')
+                if not netmask or str(netmask).strip() == '':
+                    netmask = '255.255.255.0'
+                addresses.append(InterfaceAddress(ip=ip, netmask=netmask))
             
+            logger.info(f"ipAddrTable walk from {target_ip}: received {walk_count} entries, found {len(address_data)} unique IPs, {len(addresses)} valid addresses")
             return addresses
         
         except Exception as e:
             logger.warning(f"Failed to get interfaces from {target_ip}: {str(e)}")
             return []
     
-    def _get_interfaces_simple(self, target_ip: str, community: str, version: str) -> List[InterfaceAddress]:
-        """Fallback method to get interfaces with a /24 assumption."""
-        try:
-            transport = self._create_transport_target(target_ip)
-            community_data = self._create_community_data(community, version)
-            
-            addresses = []
-            for error_indication, error_status, error_index, var_binds in bulkCmd(
-                self.snmp_engine, community_data, transport, ContextData(),
-                0, 25,
-                ObjectType(ObjectIdentity('IP-MIB', 'ipAddrTable'))
-            ):
-                if error_indication:
-                    break
-                
-                for name, val in var_binds:
-                    oid_parts = name.prettyPrint().split('.')
-                    if len(oid_parts) > 10:
-                        ip = '.'.join(oid_parts[-4:])
-                        if not ip.startswith('127.') and not ip.startswith('169.254'):
-                            # Default to /24 for now (Phase 0)
-                            addresses.append(InterfaceAddress(ip=ip, netmask='255.255.255.0'))
-            
-            return addresses
-        
-        except Exception as e:
-            logger.debug(f"Simple interface fetch failed: {str(e)}")
-            return []
-    
     def get_routing_entries(self, target_ip: str, community: str, version: str) -> List[RouteEntry]:
         """
-        Query routing table entries.
-        Walks ipRouteTable (RFC 1213) or ipCidrRouteTable (RFC 2096).
+        Query routing table entries from ipRouteTable (OID 1.3.6.1.2.1.4.21.1).
         """
         routes = []
         try:
             transport = self._create_transport_target(target_ip)
             community_data = self._create_community_data(community, version)
             
-            # Try ipCidrRouteTable first (1.3.6.1.2.1.4.24.4)
-            for error_indication, error_status, error_index, var_binds in bulkCmd(
-                self.snmp_engine, community_data, transport, ContextData(),
-                0, 25,
-                ObjectType(ObjectIdentity('IP-FORWARD-MIB', 'ipCidrRouteEntry'))
+            walk_count = 0
+            for error_indication, error_status, error_index, var_binds in nextCmd(
+                self.snmp_engine,
+                community_data,
+                transport,
+                ContextData(),
+                ObjectType(ObjectIdentity('1.3.6.1.2.1.4.21.1.1')),
+                ObjectType(ObjectIdentity('1.3.6.1.2.1.4.21.1.7')),
+                ObjectType(ObjectIdentity('1.3.6.1.2.1.4.21.1.9')),
+                ObjectType(ObjectIdentity('1.3.6.1.2.1.4.21.1.11')),
+                lexicographicMode=False
             ):
                 if error_indication:
-                    logger.debug(f"ipCidrRouteTable walk failed, trying ipRouteTable")
+                    logger.warning(f"ipRouteTable walk failed: {error_indication}")
                     break
-                
-                for name, val in var_binds:
-                    oid_str = name.prettyPrint()
-                    # Parse OID to extract destination, mask, protocol, metric
-                    # Simplified parsing for Phase 0
-                    pass
-            
-            # Fallback to ipRouteTable
-            if not routes:
-                routes = self._get_routes_legacy(target_ip, community, version)
-            
+                if error_status:
+                    logger.warning(
+                        f"ipRouteTable walk error at {error_index}: {error_status.prettyPrint()}"
+                    )
+                    break
+                if len(var_binds) < 4:
+                    continue
+                walk_count += 1
+                dest_raw = var_binds[0][1].prettyPrint().strip()
+                mask_raw = var_binds[3][1].prettyPrint().strip()
+                next_hop_raw = var_binds[1][1].prettyPrint().strip()
+                proto_raw = str(var_binds[2][1]).strip()
+                try:
+                    IPv4Address(dest_raw)
+                except ValueError:
+                    logger.debug(
+                        "Skipping route row due to invalid destination",
+                        extra={
+                            "dest_raw": dest_raw,
+                            "mask_raw": mask_raw,
+                            "next_hop_raw": next_hop_raw,
+                            "proto_raw": proto_raw,
+                        },
+                    )
+                    continue
+                try:
+                    mask_val = str(IPv4Address(mask_raw))
+                except ValueError:
+                    logger.debug(
+                        "Using fallback mask for route row",
+                        extra={
+                            "dest_raw": dest_raw,
+                            "mask_raw": mask_raw,
+                            "next_hop_raw": next_hop_raw,
+                            "proto_raw": proto_raw,
+                        },
+                    )
+                    mask_val = '255.255.255.0'
+                next_hop_val = None
+                if next_hop_raw and next_hop_raw != '0.0.0.0':
+                    try:
+                        next_hop_val = str(IPv4Address(next_hop_raw))
+                    except ValueError:
+                        logger.debug(
+                            "Dropping non-IP next hop",
+                            extra={
+                                "dest_raw": dest_raw,
+                                "mask_raw": mask_raw,
+                                "next_hop_raw": next_hop_raw,
+                                "proto_raw": proto_raw,
+                            },
+                        )
+                        next_hop_val = None
+                logger.debug(
+                    "Parsed route row",
+                    extra={
+                        "dest_raw": dest_raw,
+                        "mask_raw": mask_raw,
+                        "next_hop_raw": next_hop_raw,
+                        "proto_raw": proto_raw,
+                        "dest": dest_raw,
+                        "mask": mask_val,
+                        "next_hop": next_hop_val,
+                    },
+                )
+                routes.append(
+                    RouteEntry(
+                        destination_ip=dest_raw,
+                        netmask=mask_val,
+                        next_hop=next_hop_val,
+                        protocol=proto_raw if proto_raw else None
+                    )
+                )
+            logger.info(
+                f"ipRouteTable walk from {target_ip}: processed {walk_count} rows, returned {len(routes)} routes"
+            )
             return routes
         
         except Exception as e:
             logger.warning(f"Failed to get routes from {target_ip}: {str(e)}")
-            return []
-    
-    def _get_routes_legacy(self, target_ip: str, community: str, version: str) -> List[RouteEntry]:
-        """Fallback method to get routes from ipRouteTable."""
-        routes = []
-        try:
-            transport = self._create_transport_target(target_ip)
-            community_data = self._create_community_data(community, version)
-            
-            route_data = {}
-            
-            for error_indication, error_status, error_index, var_binds in bulkCmd(
-                self.snmp_engine, community_data, transport, ContextData(),
-                0, 25,
-                ObjectType(ObjectIdentity('IP-MIB', 'ipRouteTable'))
-            ):
-                if error_indication:
-                    break
-                
-                for name, val in var_binds:
-                    oid_str = name.prettyPrint()
-                    oid_parts = oid_str.split('.')
-                    
-                    # OID format: 1.3.6.1.2.1.4.21.1.<col>.<dest_ip>
-                    if len(oid_parts) >= 15:
-                        dest_ip = '.'.join(oid_parts[-4:])
-                        col = int(oid_parts[-5])
-                        
-                        if dest_ip not in route_data:
-                            route_data[dest_ip] = {}
-                        
-                        # Column mapping: 1=dest, 2=ifIndex, 3=metric1, 7=nextHop, 9=protocol, 11=netMask
-                        if col == 11:  # netMask
-                            route_data[dest_ip]['netmask'] = str(val)
-                        elif col == 7:  # nextHop
-                            route_data[dest_ip]['next_hop'] = str(val)
-                        elif col == 9:  # protocol
-                            route_data[dest_ip]['protocol'] = str(val)
-                        elif col == 3:  # metric
-                            route_data[dest_ip]['metric'] = int(val)
-            
-            # Convert to RouteEntry objects
-            for dest_ip, data in route_data.items():
-                route = RouteEntry(
-                    destination_ip=dest_ip,
-                    netmask=data.get('netmask', '255.255.255.0'),
-                    next_hop=data.get('next_hop'),
-                    protocol=data.get('protocol')
-                )
-                routes.append(route)
-            
-            return routes
-        
-        except Exception as e:
-            logger.debug(f"Legacy route fetch failed: {str(e)}")
             return []
