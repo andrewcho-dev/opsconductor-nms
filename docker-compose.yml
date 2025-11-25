@@ -1,93 +1,41 @@
-name: llm-topology
+name: network-discovery-simplified
 services:
-  vllm:
-    image: vllm/vllm-openai:latest
-    command: >
-      --host 0.0.0.0
-      --port 8000
-      --model ${MODEL_NAME}
-      --dtype auto
-      --max-model-len ${VLLM_MAX_CONTEXT_LEN:-8192}
-      --trust-remote-code
-    environment:
-      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
-    volumes:
-      - ${MODEL_DIR:-./models}:/models:ro
-    ports:
-      - "8000:8000"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - capabilities: ["gpu"]
-    gpus: all
-    healthcheck:
-      test: ["CMD", "bash", "-lc", "curl -sf http://localhost:8000/health || exit 1"]
-      interval: 10s
-      timeout: 3s
-      retries: 10
-
   postgres:
     image: postgres:16
     environment:
       - POSTGRES_PASSWORD=opsconductor
       - POSTGRES_DB=opsconductor
       - POSTGRES_USER=opsconductor
-      - POSTGRES_INITDB_ARGS=-c shared_preload_libraries=pgcrypto
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./services/init-db/001_init_topo.sql:/docker-entrypoint-initdb.d/001_init_topo.sql
-      - ./services/router-discovery/migrations/001_create_schema.sql:/docker-entrypoint-initdb.d/002_create_schema.sql
-      - ./services/router-discovery/migrations/002_add_cli_default_credentials.sql:/docker-entrypoint-initdb.d/003_add_cli_default_credentials.sql
     ports:
-      - "5432:5432"
+      - "5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
       timeout: 3s
       retries: 10
 
-  state-server:
+  network-discovery:
     build:
-      context: ./services/state-server
+      context: ./services/network-discovery-simplified
       dockerfile: Dockerfile
     environment:
-      - DB_URL=postgresql://topo:topo@postgres:5432/topology
-      - API_PORT=8080
-      - UI_WS_ORIGIN=${UI_WS_ORIGIN:-*}
-    volumes:
-      - ./services/state-server/app:/app/app
+      - DATABASE_URL=postgresql://opsconductor:opsconductor@postgres:5432/opsconductor
+      - LOG_LEVEL=INFO
+      - PORT=8000
+    ports:
+      - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
-    ports:
-      - "8080:8080"
-
-  analyst:
-    build:
-      context: ./services/llm-analyst
-      dockerfile: Dockerfile
-    environment:
-      - LLM_BASE_URL=http://vllm:8000/v1
-      - LLM_MODEL=${MODEL_NAME}
-      - RESPONSE_FORMAT=${RESPONSE_FORMAT:-json_schema}
-      - JSON_SCHEMA_PATH=/app/schemas/topology_patch.schema.json
-      - SYSTEM_PROMPT_PATH=/app/prompts/system_topologist.txt
-      - BATCH_MS=${BATCH_MS:-250}
-      - MAX_EVIDENCE_ITEMS=${MAX_EVIDENCE_ITEMS:-512}
-      - STATE_SERVER_URL=http://state-server:8080
-      - SEED_GATEWAY_IP=${GATEWAY_IP:-}
-      - SEED_FIREWALL_IP=${FIREWALL_IP:-}
-    volumes:
-      - ./schemas:/app/schemas:ro
-      - ./prompts:/app/prompts:ro
-    ports:
-      - "8100:8100"
-    depends_on:
-      vllm:
-        condition: service_started
-      state-server:
-        condition: service_started
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   ui:
     build:
@@ -95,193 +43,13 @@ services:
       dockerfile: Dockerfile
     ports:
       - "3000:3000"
-    depends_on:
-      state-server:
-        condition: service_started
-
-  router-discovery:
-    build:
-      context: .
-      dockerfile: ./services/router-discovery/Dockerfile
-    environment:
-      - DATABASE_URL=postgresql://opsconductor:opsconductor@postgres:5432/opsconductor
-      - LOG_LEVEL=DEBUG
-      - PORT=8000
-    volumes:
-      - ./services/router-discovery/app:/app/app
-    ports:
-      - "8200:8000"
-    depends_on:
-      postgres:
-        condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "sh", "-c", "test -S /tmp/npm.sock || ps aux | grep node | grep -v grep"]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 30s
 
-  # DISABLED: packet-collector
-  # packet-collector:
-  #   build:
-  #     context: ./services/packet-collector
-  #     dockerfile: Dockerfile
-  #   network_mode: host
-  #   cap_add:
-  #     - NET_ADMIN
-  #     - NET_RAW
-  #   environment:
-  #     - IFACE=${PCAP_IFACE:-eth0}
-  #     - BATCH_MS=${BATCH_MS:-250}
-  #     - MAX_EVIDENCE_ITEMS=${MAX_EVIDENCE_ITEMS:-1024}
-  #     - FILTER_BPF=${FILTER_BPF:-arp or ip or ip6}
-  #     - ANALYST_URL=${ANALYST_URL:-http://127.0.0.1:8100/tick}
-  #     - STATE_SERVER_URL=${STATE_SERVER_URL:-http://127.0.0.1:8080}
-  #     - SEED_GATEWAY_IP=${GATEWAY_IP:-}
-  #     - SEED_FIREWALL_IP=${FIREWALL_IP:-}
-  #     - INTERNAL_NETWORK_PREFIX=${INTERNAL_NETWORK_PREFIX:-192.168.10.}
-  #     - HEALTH_PORT=9100
-  #     - TZ=UTC
-  #   volumes:
-  #     - packet_data:/data
-  #   healthcheck:
-  #     test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9100/health"]
-  #     interval: 10s
-  #     timeout: 3s
-  #     retries: 10
-  #   restart: unless-stopped
-  #   depends_on:
-  #     state-server:
-  #       condition: service_started
-
-  # DISABLED: nmap-scanner
-  # nmap-scanner:
-  #   build:
-  #     context: ./services/nmap-scanner
-  #     dockerfile: Dockerfile
-  #   network_mode: host
-  #   cap_add:
-  #     - NET_ADMIN
-  #     - NET_RAW
-  #   environment:
-  #     - STATE_SERVER_URL=http://127.0.0.1:8080
-  #     - SCAN_INTERVAL_SECONDS=${NMAP_SCAN_INTERVAL_SECONDS:-3600}
-  #     - SCAN_PROFILE=${NMAP_SCAN_PROFILE:-standard}
-  #     - NMAP_TIMING=${NMAP_TIMING:-4}
-  #     - NSE_SCRIPTS=${NSE_SCRIPTS:-default,vulners,vulscan}
-  #     - CUSTOM_NMAP_ARGS=${CUSTOM_NMAP_ARGS:-}
-  #     - TUNNEL_NETWORKS=${TUNNEL_NETWORKS:-10.121.0.0/16}
-  #     - ENABLE_SUBNET_DISCOVERY=${ENABLE_SUBNET_DISCOVERY:-true}
-  #     - HEALTH_PORT=9200
-  #     - MAX_PARALLEL_SCANS=${MAX_PARALLEL_SCANS:-5}
-  #   volumes:
-  #     - ./services/nmap-scanner/app:/app/app
-  #   depends_on:
-  #     state-server:
-  #       condition: service_started
-  #   restart: unless-stopped
-
-  # DISABLED: snmp-discovery
-  # snmp-discovery:
-  #   build:
-  #     context: ./services/snmp-discovery
-  #     dockerfile: Dockerfile
-  #   environment:
-  #     - STATE_SERVER_URL=http://state-server:8080
-  #     - SCAN_INTERVAL_SECONDS=${SNMP_SCAN_INTERVAL_SECONDS:-300}
-  #     - SNMP_COMMUNITY=${SNMP_COMMUNITY:-public}
-  #     - SNMP_TIMEOUT=${SNMP_TIMEOUT:-2.0}
-  #     - SNMP_RETRIES=${SNMP_RETRIES:-1}
-  #     - HEALTH_PORT=9300
-  #   volumes:
-  #     - ./services/snmp-discovery/app:/app/app
-  #   ports:
-  #     - "9300:9300"
-  #   depends_on:
-  #     state-server:
-  #       condition: service_started
-  #   restart: unless-stopped
-
-
-  # DISABLED: network-discovery
-  # network-discovery:
-  #   build:
-  #     context: ./services/network-discovery
-  #     dockerfile: Dockerfile
-  #   environment:
-  #     - STATE_SERVER_URL=http://state-server:8080
-  #     - GATEWAY_IP=${GATEWAY_IP:-}
-  #     - SNMP_COMMUNITY=${SNMP_COMMUNITY:-public}
-  #     - SNMP_TIMEOUT=${SNMP_TIMEOUT:-2.0}
-  #     - SNMP_RETRIES=${SNMP_RETRIES:-1}
-  #     - DISCOVERY_INTERVAL_SECONDS=${NETWORK_DISCOVERY_INTERVAL_SECONDS:-1800}
-  #     - HEALTH_PORT=9700
-  #   volumes:
-  #     - ./services/network-discovery/app:/app/app
-  #   ports:
-  #     - "9700:9700"
-  #   depends_on:
-  #     - state-server:
-  #       condition: service_started
-  #   restart: unless-stopped
-
-  # DISABLED: mac-enricher
-  # mac-enricher:
-  #   build:
-  #     context: ./services/mac-enricher
-  #     dockerfile: Dockerfile
-  #   environment:
-  #     - STATE_SERVER_URL=http://state-server:8080
-  #     - SCAN_INTERVAL_SECONDS=${MAC_SCAN_INTERVAL_SECONDS:-3600}
-  #     - HEALTH_PORT=9400
-  #   volumes:
-  #     - mac_oui_data:/data
-  #     - ./services/mac-enricher/app:/app/app
-  #   ports:
-  #     - "9400:9400"
-  #   depends_on:
-  #     state-server:
-  #       condition: service_started
-  #   restart: unless-stopped
-
-  # DISABLED: mib-assigner
-  # mib-assigner:
-  #   build:
-  #     context: ./services/mib-assigner
-  #     dockerfile: Dockerfile
-  #   environment:
-  #     - STATE_SERVER_URL=http://state-server:8080
-  #     - SCAN_INTERVAL_SECONDS=${MIB_ASSIGN_INTERVAL_SECONDS:-600}
-  #     - HEALTH_PORT=9500
-  #   volumes:
-  #     - ./services/mib-assigner/app:/app/app
-  #   ports:
-  #     - "9500:9500"
-  #   depends_on:
-  #     state-server:
-  #       condition: service_started
-  #   restart: unless-stopped
-
-  # DISABLED: mib-walker
-  # mib-walker:
-  #   build:
-  #     context: ./services/mib-walker
-  #     dockerfile: Dockerfile
-  #   environment:
-  #     - STATE_SERVER_URL=http://state-server:8080
-  #     - WALK_INTERVAL_SECONDS=${MIB_WALK_INTERVAL_SECONDS:-1800}
-  #     - HEALTH_PORT=9600
-  #   volumes:
-  #     - ./services/mib-walker/app:/app/app
-  #   ports:
-  #     - "9600:9600"
-  #   depends_on:
-  #     state-server:
-  #       condition: service_started
-  #   restart: unless-stopped
-
 volumes:
   pgdata:
-  packet_data:
-  mac_oui_data:

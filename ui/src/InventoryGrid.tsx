@@ -45,6 +45,7 @@ interface InventoryGridProps {
   onNavigateToTopology: () => void;
   onNavigateToDiscovery?: () => void;
   onNavigateToRouting?: () => void;
+  onNavigateToRouterInventory?: () => void;
 }
 
 interface SnmpConfig {
@@ -142,9 +143,9 @@ function renderComplexValue(value: any, depth: number = 0): React.ReactNode {
   return String(value);
 }
 
-const STATE_SERVER_API_BASE = "http://10.120.0.18:8080";
+const STATE_SERVER_API_BASE = "http://10.120.0.18:8000";
 
-function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology, onNavigateToDiscovery, onNavigateToRouting }: InventoryGridProps) {
+function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology, onNavigateToDiscovery, onNavigateToRouting, onNavigateToRouterInventory }: InventoryGridProps) {
   const [devices, setDevices] = useState<InventoryDevice[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -475,6 +476,9 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology, onNav
           </label>
           <button onClick={loadInventory} className="refresh-btn">
             Refresh
+          </button>
+          <button onClick={onNavigateToRouterInventory} className="admin-btn" style={{ backgroundColor: "#8b5cf6" }}>
+            Router Inventory
           </button>
           <button onClick={onNavigateToRouting} className="admin-btn" style={{ backgroundColor: "#10b981" }}>
             Routing Table

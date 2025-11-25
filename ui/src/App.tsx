@@ -4,12 +4,13 @@ import Admin from "./Admin";
 import TopologyMap from "./TopologyMap";
 import DiscoveryPage from "./DiscoveryPage";
 import RoutingTable from "./RoutingTable";
+import RouterInventory from "./RouterInventory";
 
-// NOTE: For this docker-compose setup the API is always served by state-server on port 8080.
+// NOTE: For this docker-compose setup the API is served by network-discovery on port 8000.
 // We hardcode apiBase here to avoid any ambiguity with Vite env vars.
-const apiBase = "http://10.120.0.18:8080";
+const apiBase = "http://10.120.0.18:8000";
 
-type Page = "inventory" | "admin" | "topology" | "discovery" | "routing";
+type Page = "inventory" | "admin" | "topology" | "discovery" | "routing" | "router-inventory";
 
 function App() {
   const [currentPage, setCurrentPage] = useState<Page>("inventory");
@@ -26,6 +27,7 @@ function App() {
             onNavigateToTopology={() => setCurrentPage("topology")}
             onNavigateToDiscovery={() => setCurrentPage("discovery")}
             onNavigateToRouting={() => setCurrentPage("routing")}
+            onNavigateToRouterInventory={() => setCurrentPage("router-inventory")}
           />
         )}
         {currentPage === "admin" && (
@@ -39,6 +41,9 @@ function App() {
         )}
         {currentPage === "routing" && (
           <RoutingTable apiBase={apiBase} onBack={() => setCurrentPage("inventory")} />
+        )}
+        {currentPage === "router-inventory" && (
+          <RouterInventory apiBase={apiBase} onBack={() => setCurrentPage("inventory")} />
         )}
       </div>
     </div>

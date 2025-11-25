@@ -14,6 +14,16 @@ interface RoutingData {
   routes: Route[];
 }
 
+interface Router {
+  id: number;
+  ip_address: string;
+  hostname: string | null;
+  vendor: string | null;
+  model: string | null;
+  discovered_via: string;
+  created_at: string;
+}
+
 interface RoutingTableProps {
   apiBase: string;
   onBack: () => void;
@@ -21,19 +31,51 @@ interface RoutingTableProps {
 
 function RoutingTable({ apiBase, onBack }: RoutingTableProps) {
   const [data, setData] = useState<RoutingData | null>(null);
+  const [routers, setRouters] = useState<Router[]>([]);
+  const [selectedRouterId, setSelectedRouterId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
+  const loadRouters = async () => {
+    try {
+      const response = await fetch(`${apiBase}/api/v1/routers`);
+      if (!response.ok) throw new Error("Failed to fetch routers");
+      const routerData = await response.json();
+      setRouters(routerData);
+      
+      // Auto-select first router if none selected
+      if (routerData.length > 0 && !selectedRouterId) {
+        setSelectedRouterId(routerData[0].id);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unknown error");
+    }
+  };
+
   const loadRoutingTable = async () => {
+    if (!selectedRouterId) return;
+    
     try {
       setRefreshing(true);
-      const response = await fetch(`${apiBase}/api/routing/10.120.0.1`);
+      const response = await fetch(`${apiBase}/api/v1/routers/${selectedRouterId}/routes`);
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.detail || "Failed to fetch routing table");
       }
-      const routingData = await response.json();
+      const routes = await response.json();
+      
+      // Get router details
+      const routerResponse = await fetch(`${apiBase}/api/v1/routers/${selectedRouterId}`);
+      const router = await routerResponse.json();
+      
+      const routingData: RoutingData = {
+        device_ip: router.ip_address,
+        hostname: router.hostname,
+        total_routes: routes.length,
+        routes: routes
+      };
+      
       setData(routingData);
       setError(null);
     } catch (err) {
@@ -45,12 +87,20 @@ function RoutingTable({ apiBase, onBack }: RoutingTableProps) {
   };
 
   useEffect(() => {
-    loadRoutingTable();
+    loadRouters();
   }, [apiBase]);
+
+  useEffect(() => {
+    if (selectedRouterId) {
+      loadRoutingTable();
+    }
+  }, [selectedRouterId, apiBase]);
 
   const uniqueNextHops = data?.routes
     ? Array.from(new Set(data.routes.map(r => r.next_hop).filter(nh => nh !== null)))
     : [];
+
+  const selectedRouter = routers.find(r => r.id === selectedRouterId);
 
   return (
     <div style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
@@ -90,9 +140,28 @@ function RoutingTable({ apiBase, onBack }: RoutingTableProps) {
           </button>
         </div>
         <h1 style={{ margin: 0, fontSize: "1.5rem", fontWeight: "600" }}>
-          Routing Table - 10.120.0.1
+          Routing Table
         </h1>
-        <div style={{ width: "180px" }}></div>
+        <div style={{ width: "200px" }}>
+          <select
+            value={selectedRouterId || ""}
+            onChange={(e) => setSelectedRouterId(e.target.value ? parseInt(e.target.value) : null)}
+            style={{
+              width: "100%",
+              padding: "0.5rem",
+              border: "1px solid #d1d5db",
+              borderRadius: "0.375rem",
+              fontSize: "0.875rem",
+              fontFamily: "monospace"
+            }}
+          >
+            {routers.map((router) => (
+              <option key={router.id} value={router.id}>
+                {router.ip_address} {router.hostname ? `(${router.hostname})` : ""}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {loading && <div style={{ textAlign: "center", padding: "2rem", color: "#6b7280" }}>Loading routing table...</div>}
@@ -110,7 +179,7 @@ function RoutingTable({ apiBase, onBack }: RoutingTableProps) {
         </div>
       )}
 
-      {data && (
+      {data && selectedRouter && (
         <>
           <div style={{ 
             marginBottom: "1.5rem", 
@@ -119,7 +188,7 @@ function RoutingTable({ apiBase, onBack }: RoutingTableProps) {
             borderRadius: "0.5rem",
             border: "1px solid #e5e7eb"
           }}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "1rem" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "1rem" }}>
               <div>
                 <div style={{ fontSize: "0.75rem", color: "#6b7280", textTransform: "uppercase", fontWeight: "600", marginBottom: "0.25rem" }}>
                   Device IP
@@ -137,6 +206,22 @@ function RoutingTable({ apiBase, onBack }: RoutingTableProps) {
                   Total Routes
                 </div>
                 <div style={{ fontSize: "1rem", fontWeight: "500" }}>{data.total_routes}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: "0.75rem", color: "#6b7280", textTransform: "uppercase", fontWeight: "600", marginBottom: "0.25rem" }}>
+                  Discovery Method
+                </div>
+                <div style={{ 
+                  fontSize: "0.875rem", 
+                  fontWeight: "500", 
+                  padding: "0.125rem 0.5rem",
+                  backgroundColor: selectedRouter.discovered_via === 'cli' ? '#dcfce7' : '#dbeafe',
+                  color: selectedRouter.discovered_via === 'cli' ? '#166534' : '#1e40af',
+                  borderRadius: '0.25rem',
+                  display: 'inline-block'
+                }}>
+                  {selectedRouter.discovered_via.toUpperCase()}
+                </div>
               </div>
             </div>
           </div>

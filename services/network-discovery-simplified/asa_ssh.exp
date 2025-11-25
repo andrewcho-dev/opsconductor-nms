@@ -1,0 +1,88 @@
+#!/usr/bin/expect -f
+
+set timeout 180
+set host [lindex $argv 0]
+set username [lindex $argv 1]
+set password [lindex $argv 2]
+set command [lindex $argv 3]
+
+spawn ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o KexAlgorithms=+diffie-hellman-group14-sha1 -o HostKeyAlgorithms=+ssh-rsa $username@$host
+
+expect {
+    "assword:" {
+        send "$password\r"
+        exp_continue
+    }
+    "login:" {
+        send "$username\r"
+        expect "assword:"
+        send "$password\r"
+        exp_continue
+    }
+    "User admin logged in" {
+        expect {
+            "#" {
+                send "$command\r"
+                expect {
+                    "#" {
+                        send "exit\r"
+                        expect eof
+                    }
+                    timeout {
+                        send "exit\r"
+                        expect eof
+                    }
+                }
+            }
+            ">" {
+                send "$command\r"
+                expect {
+                    ">" {
+                        send "exit\r"
+                        expect eof
+                    }
+                    timeout {
+                        send "exit\r"
+                        expect eof
+                    }
+                }
+            }
+            timeout {
+                send "exit\r"
+                expect eof
+            }
+        }
+    }
+    "#" {
+        send "$command\r"
+        expect {
+            "#" {
+                send "exit\r"
+                expect eof
+            }
+            timeout {
+                send "exit\r"
+                expect eof
+            }
+        }
+    }
+    ">" {
+        send "$command\r"
+        expect {
+            ">" {
+                send "exit\r"
+                expect eof
+            }
+            timeout {
+                send "exit\r"
+                expect eof
+            }
+        }
+    }
+    timeout {
+        exit 1
+    }
+    eof {
+        exit 0
+    }
+}
