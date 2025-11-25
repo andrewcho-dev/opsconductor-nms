@@ -5,6 +5,7 @@ Uses subprocess to call snmpwalk/snmpget commands for basic operations.
 
 import subprocess
 import logging
+import re
 from typing import List, Optional
 from .types import SystemInfo, RouteEntry
 
@@ -70,28 +71,161 @@ class SimpleSnmpClient:
         routes = []
         
         try:
-            # For edge routers like Cradlepoints, just return a basic connected route
-            # They don't need to have routing tables to be discovered as devices
+            # Get routing table destinations
+            dest_cmd = ['snmpwalk', '-v2c', '-c', community, '-On', ip, '1.3.6.1.2.1.4.21.1.1']
+            dest_output = self._run_snmp_command(dest_cmd)
+            
+            # Get routing table netmasks
+            mask_cmd = ['snmpwalk', '-v2c', '-c', community, '-On', ip, '1.3.6.1.2.1.4.21.1.11']
+            mask_output = self._run_snmp_command(mask_cmd)
+            
+            if dest_output and mask_output:
+                # Parse destinations and netmasks
+                dest_routes = self._parse_snmp_routes(dest_output)
+                mask_routes = self._parse_snmp_masks(mask_output)
+                
+                # Combine destinations with their netmasks
+                for dest_ip in dest_routes:
+                    if self._is_valid_route_ip(dest_ip, ip):
+                        netmask = mask_routes.get(dest_ip, "255.255.255.0")  # Default to /24 if not found
+                        cidr_notation = self._ip_and_mask_to_cidr(dest_ip, netmask)
+                        
+                        routes.append(RouteEntry(
+                            destination=dest_ip,
+                            netmask=netmask,
+                            next_hop="0.0.0.0",
+                            protocol='snmp'
+                        ))
+                        logger.debug(f"Added valid route: {dest_ip}/{netmask}")
+            
+            # Always add the local connected route for the device itself
+            local_network = self._get_local_network(ip)
             routes.append(RouteEntry(
-                destination=f"{ip}/24",  # Assume /24 network
+                destination=local_network,
                 netmask="255.255.255.0",
-                next_hop="0.0.0.0",  # Self
+                next_hop="0.0.0.0",
                 protocol='connected'
             ))
             
-            logger.info(f"Added basic connected route for {ip}")
+            logger.info(f"Added {len(routes)} routes for {ip}")
             return routes
             
         except Exception as e:
             logger.error(f"Failed to get routes from {ip}: {e}")
-            # Even if routing fails, return a basic route so the device gets discovered
+            # Fallback to basic connected route
+            local_network = self._get_local_network(ip)
             routes.append(RouteEntry(
-                destination=f"{ip}/24",
+                destination=local_network,
                 netmask="255.255.255.0", 
                 next_hop="0.0.0.0",
                 protocol='connected'
             ))
             return routes
+    
+    def _parse_snmp_routes(self, output: str) -> List[str]:
+        """Parse destination IPs from SNMP route output."""
+        routes = []
+        for line in output.splitlines():
+            line = line.strip()
+            if 'IpAddress:' in line:
+                try:
+                    ip_match = re.search(r'IpAddress: (\d+\.\d+\.\d+\.\d+)', line)
+                    if ip_match:
+                        dest_ip = ip_match.group(1)
+                        routes.append(dest_ip)
+                except Exception as e:
+                    logger.debug(f"Failed to parse route line: {line}, error: {e}")
+                    continue
+        return routes
+    
+    def _parse_snmp_masks(self, output: str) -> dict:
+        """Parse netmask mapping from SNMP mask output."""
+        masks = {}
+        for line in output.splitlines():
+            line = line.strip()
+            if 'IpAddress:' in line:
+                try:
+                    # Extract the IP from the OID (part before =)
+                    oid_part = line.split('=')[0].strip()
+                    # Extract the IP from the OID (last 4 octets)
+                    oid_parts = oid_part.split('.')
+                    if len(oid_parts) >= 4:
+                        dest_ip = f"{oid_parts[-4]}.{oid_parts[-3]}.{oid_parts[-2]}.{oid_parts[-1]}"
+                        
+                        # Extract the netmask from the value
+                        mask_match = re.search(r'IpAddress: (\d+\.\d+\.\d+\.\d+)', line)
+                        if mask_match:
+                            netmask = mask_match.group(1)
+                            masks[dest_ip] = netmask
+                except Exception as e:
+                    logger.debug(f"Failed to parse mask line: {line}, error: {e}")
+                    continue
+        return masks
+    
+    def _ip_and_mask_to_cidr(self, ip: str, netmask: str) -> str:
+        """Convert IP and netmask to CIDR notation."""
+        try:
+            # Convert netmask to CIDR prefix length
+            mask_parts = netmask.split('.')
+            prefix_length = 0
+            for part in mask_parts:
+                octet = int(part)
+                while octet > 0:
+                    prefix_length += octet & 1
+                    octet >>= 1
+            return f"{ip}/{prefix_length}"
+        except Exception:
+            return f"{ip}/24"  # Fallback
+    
+    def _is_valid_route_ip(self, dest_ip: str, device_ip: str) -> bool:
+        """Validate that a route IP is legitimate for this network."""
+        try:
+            parts = dest_ip.split('.')
+            if len(parts) != 4:
+                return False
+            
+            # Convert to integers for validation
+            octets = [int(part) for part in parts]
+            
+            # STRICT FILTERING - Absolutely no 1.x.x.x addresses
+            if octets[0] == 1:  # NEVER accept 1.x.x.x - these are garbage
+                return False
+            
+            # Filter out other invalid IPs
+            if octets[0] == 0 and dest_ip != "0.0.0.0":
+                return False
+            if octets[0] == 255 and dest_ip != "255.255.255.255":
+                return False
+            if octets[0] >= 224:  # Multicast and above
+                return False
+            if octets[0] == 127 and dest_ip != "127.0.0.1":  # Loopback
+                return False
+            
+            # ONLY accept IPs that are in your known network ranges
+            # Your networks are: 10.120.x.x, 10.121.x.x, 10.66.x.x, etc.
+            # Also allow 0.0.0.0 for default routes
+            if octets[0] == 10:
+                # Accept 10.x.x.x addresses
+                return True
+            elif dest_ip == "0.0.0.0":
+                # Accept default route
+                return True
+            else:
+                # REJECT everything else (including 1.x.x.x)
+                return False
+            
+        except Exception:
+            return False
+    
+    def _get_local_network(self, ip: str) -> str:
+        """Get the local network for this device IP."""
+        try:
+            parts = ip.split('.')
+            if len(parts) == 4:
+                return f"{parts[0]}.{parts[1]}.{parts[2]}.0/24"
+            return f"{ip}/24"
+        except Exception:
+            return f"{ip}/24"
     
     def _get_route_mask(self, ip: str, community: str, dest_ip: str) -> Optional[str]:
         """Get netmask for a specific route."""

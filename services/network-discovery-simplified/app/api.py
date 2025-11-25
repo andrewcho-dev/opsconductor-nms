@@ -123,13 +123,33 @@ def get_router_routes(router_id: int, db: Session = Depends(get_db)):
         {
             "id": r.id,
             "destination": r.destination.split('/')[0] if '/' in r.destination else r.destination,  # Extract IP from CIDR
-            "netmask": r.destination.split('/')[1] if '/' in r.destination else "255.255.255.0",  # Extract mask from CIDR
+            "netmask": _cidr_to_netmask(r.destination.split('/')[1] if '/' in r.destination else "24"),  # Convert CIDR to netmask
             "next_hop": r.next_hop,
             "protocol": r.protocol,
             "router_id": r.router_id
         }
         for r in routes
     ]
+
+
+def _cidr_to_netmask(cidr_prefix: str) -> str:
+    """Convert CIDR prefix to netmask."""
+    try:
+        prefix = int(cidr_prefix)
+        if prefix < 0 or prefix > 32:
+            return "255.255.255.0"  # Default fallback
+        
+        # Convert prefix to netmask
+        mask = (0xffffffff >> (32 - prefix)) << (32 - prefix)
+        netmask_parts = [
+            str((mask >> 24) & 0xff),
+            str((mask >> 16) & 0xff),
+            str((mask >> 8) & 0xff),
+            str(mask & 0xff)
+        ]
+        return '.'.join(netmask_parts)
+    except Exception:
+        return "255.255.255.0"  # Default fallback
 
 
 @router.get("/routers/{router_id}")

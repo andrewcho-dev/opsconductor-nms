@@ -40,7 +40,10 @@ function RoutingTable({ apiBase, onBack }: RoutingTableProps) {
   const loadRouters = async () => {
     try {
       const response = await fetch(`${apiBase}/api/v1/routers`);
-      if (!response.ok) throw new Error("Failed to fetch routers");
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || "Failed to fetch routers");
+      }
       const routerData = await response.json();
       setRouters(routerData);
       
@@ -49,6 +52,7 @@ function RoutingTable({ apiBase, onBack }: RoutingTableProps) {
         setSelectedRouterId(routerData[0].id);
       }
     } catch (err) {
+      console.error("Error in loadRouters:", err);
       setError(err instanceof Error ? err.message : "Unknown error");
     }
   };
@@ -58,20 +62,33 @@ function RoutingTable({ apiBase, onBack }: RoutingTableProps) {
     
     try {
       setRefreshing(true);
+      
+      // Get routes first
       const response = await fetch(`${apiBase}/api/v1/routers/${selectedRouterId}/routes`);
       if (!response.ok) {
-        const errorData = await response.json();
+        const errorData = await response.json().catch(() => ({}));
         throw new Error(errorData.detail || "Failed to fetch routing table");
       }
       const routes = await response.json();
       
-      // Get router details
-      const routerResponse = await fetch(`${apiBase}/api/v1/routers/${selectedRouterId}`);
-      const router = await routerResponse.json();
+      // Get router details with separate error handling
+      let router = null;
+      try {
+        const routerResponse = await fetch(`${apiBase}/api/v1/routers/${selectedRouterId}`);
+        if (routerResponse.ok) {
+          router = await routerResponse.json();
+        }
+      } catch (routerErr) {
+        console.warn("Failed to fetch router details, using fallback:", routerErr);
+        router = {
+          ip_address: `Router ${selectedRouterId}`,
+          hostname: "Unknown"
+        };
+      }
       
       const routingData: RoutingData = {
-        device_ip: router.ip_address,
-        hostname: router.hostname,
+        device_ip: router?.ip_address || `Router ${selectedRouterId}`,
+        hostname: router?.hostname || "Unknown",
         total_routes: routes.length,
         routes: routes
       };
@@ -79,6 +96,7 @@ function RoutingTable({ apiBase, onBack }: RoutingTableProps) {
       setData(routingData);
       setError(null);
     } catch (err) {
+      console.error("Error in loadRoutingTable:", err);
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
       setLoading(false);
@@ -264,102 +282,112 @@ function RoutingTable({ apiBase, onBack }: RoutingTableProps) {
             border: "1px solid #e5e7eb", 
             borderRadius: "0.5rem", 
             overflow: "hidden",
-            backgroundColor: "white"
+            backgroundColor: "white",
+            maxHeight: "60vh", // Limit height to 60% of viewport
+            display: "flex",
+            flexDirection: "column"
           }}>
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead style={{ backgroundColor: "#f9fafb" }}>
-                <tr>
-                  <th style={{ 
-                    padding: "0.75rem 1rem", 
-                    textAlign: "left", 
-                    fontSize: "0.75rem", 
-                    fontWeight: "600", 
-                    color: "#374151",
-                    textTransform: "uppercase",
-                    borderBottom: "2px solid #e5e7eb"
-                  }}>
-                    #
-                  </th>
-                  <th style={{ 
-                    padding: "0.75rem 1rem", 
-                    textAlign: "left", 
-                    fontSize: "0.75rem", 
-                    fontWeight: "600", 
-                    color: "#374151",
-                    textTransform: "uppercase",
-                    borderBottom: "2px solid #e5e7eb"
-                  }}>
-                    Destination
-                  </th>
-                  <th style={{ 
-                    padding: "0.75rem 1rem", 
-                    textAlign: "left", 
-                    fontSize: "0.75rem", 
-                    fontWeight: "600", 
-                    color: "#374151",
-                    textTransform: "uppercase",
-                    borderBottom: "2px solid #e5e7eb"
-                  }}>
-                    Netmask
-                  </th>
-                  <th style={{ 
-                    padding: "0.75rem 1rem", 
-                    textAlign: "left", 
-                    fontSize: "0.75rem", 
-                    fontWeight: "600", 
-                    color: "#374151",
-                    textTransform: "uppercase",
-                    borderBottom: "2px solid #e5e7eb"
-                  }}>
-                    Next Hop
-                  </th>
-                  <th style={{ 
-                    padding: "0.75rem 1rem", 
-                    textAlign: "left", 
-                    fontSize: "0.75rem", 
-                    fontWeight: "600", 
-                    color: "#374151",
-                    textTransform: "uppercase",
-                    borderBottom: "2px solid #e5e7eb"
-                  }}>
-                    Protocol
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.routes.map((route, idx) => (
-                  <tr 
-                    key={idx}
-                    style={{ 
-                      borderBottom: idx < data.routes.length - 1 ? "1px solid #f3f4f6" : "none",
-                      backgroundColor: idx % 2 === 0 ? "white" : "#fafafa"
-                    }}
-                  >
-                    <td style={{ padding: "0.75rem 1rem", color: "#6b7280", fontSize: "0.875rem" }}>
-                      {idx + 1}
-                    </td>
-                    <td style={{ padding: "0.75rem 1rem", fontFamily: "monospace", fontSize: "0.875rem" }}>
-                      {route.destination}
-                    </td>
-                    <td style={{ padding: "0.75rem 1rem", fontFamily: "monospace", fontSize: "0.875rem" }}>
-                      {route.netmask}
-                    </td>
-                    <td style={{ 
+            <div style={{ overflowY: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead style={{ 
+                  backgroundColor: "#f9fafb",
+                  position: "sticky",
+                  top: 0,
+                  zIndex: 10
+                }}>
+                  <tr>
+                    <th style={{ 
                       padding: "0.75rem 1rem", 
-                      fontFamily: "monospace", 
-                      fontSize: "0.875rem",
-                      fontWeight: route.next_hop ? "500" : "normal",
-                      color: route.next_hop ? "#1e40af" : "#9ca3af"
+                      textAlign: "left", 
+                      fontSize: "0.75rem", 
+                      fontWeight: "600", 
+                      color: "#374151",
+                      textTransform: "uppercase",
+                      borderBottom: "2px solid #e5e7eb"
                     }}>
-                      {route.next_hop || "—"}
-                    </td>
-                    <td style={{ padding: "0.75rem 1rem", fontSize: "0.875rem", color: "#6b7280" }}>
-                      {route.protocol || "—"}
-                    </td>
+                      #
+                    </th>
+                    <th style={{ 
+                      padding: "0.75rem 1rem", 
+                      textAlign: "left", 
+                      fontSize: "0.75rem", 
+                      fontWeight: "600", 
+                      color: "#374151",
+                      textTransform: "uppercase",
+                      borderBottom: "2px solid #e5e7eb"
+                    }}>
+                      Destination
+                    </th>
+                    <th style={{ 
+                      padding: "0.75rem 1rem", 
+                      textAlign: "left", 
+                      fontSize: "0.75rem", 
+                      fontWeight: "600", 
+                      color: "#374151",
+                      textTransform: "uppercase",
+                      borderBottom: "2px solid #e5e7eb"
+                    }}>
+                      Netmask
+                    </th>
+                    <th style={{ 
+                      padding: "0.75rem 1rem", 
+                      textAlign: "left", 
+                      fontSize: "0.75rem", 
+                      fontWeight: "600", 
+                      color: "#374151",
+                      textTransform: "uppercase",
+                      borderBottom: "2px solid #e5e7eb"
+                    }}>
+                      Next Hop
+                    </th>
+                    <th style={{ 
+                      padding: "0.75rem 1rem", 
+                      textAlign: "left", 
+                      fontSize: "0.75rem", 
+                      fontWeight: "600", 
+                      color: "#374151",
+                      textTransform: "uppercase",
+                      borderBottom: "2px solid #e5e7eb"
+                    }}>
+                      Protocol
+                    </th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {data.routes.map((route, idx) => (
+                    <tr 
+                      key={idx}
+                      style={{ 
+                        borderBottom: idx < data.routes.length - 1 ? "1px solid #f3f4f6" : "none",
+                        backgroundColor: idx % 2 === 0 ? "white" : "#fafafa"
+                      }}
+                    >
+                      <td style={{ padding: "0.75rem 1rem", color: "#6b7280", fontSize: "0.875rem" }}>
+                        {idx + 1}
+                      </td>
+                      <td style={{ padding: "0.75rem 1rem", fontFamily: "monospace", fontSize: "0.875rem" }}>
+                        {route.destination}
+                      </td>
+                      <td style={{ padding: "0.75rem 1rem", fontFamily: "monospace", fontSize: "0.875rem" }}>
+                        {route.netmask}
+                      </td>
+                      <td style={{ 
+                        padding: "0.75rem 1rem", 
+                        fontFamily: "monospace", 
+                        fontSize: "0.875rem",
+                        fontWeight: route.next_hop ? "500" : "normal",
+                        color: route.next_hop ? "#1e40af" : "#9ca3af"
+                      }}>
+                        {route.next_hop || "—"}
+                      </td>
+                      <td style={{ padding: "0.75rem 1rem", fontSize: "0.875rem", color: "#6b7280" }}>
+                        {route.protocol || "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         </>
       )}

@@ -158,6 +158,11 @@ class NetworkDiscovery:
             "show ip route connected", # Connected routes only  
             "get route info",          # Some edge routers
             "ip route show",           # Linux-style
+            # L3 Switch specific commands
+            "show ip route",           # Cisco L3 switches
+            "show routing-table",      # Some L3 switches
+            "show ip route summary",   # Route summary
+            "display ip routing-table", # Huawei/H3C style
             # ASA-specific commands for NAT/VPN tunnels
             "show crypto map",         # VPN tunnel information
             "show nat",                # NAT translations
@@ -289,8 +294,13 @@ class NetworkDiscovery:
             for route in routes:
                 # Convert RouteEntry to CIDR format for database
                 if hasattr(route, 'destination') and hasattr(route, 'netmask'):
-                    # Convert to CIDR notation - destination should be just the IP
-                    destination_cidr = f"{route.destination}/24"  # Use /24 as default for edge routers
+                    # Convert IP/Netmask to proper CIDR notation
+                    dest_ip = route.destination
+                    netmask = route.netmask
+                    
+                    # Calculate network address and CIDR prefix
+                    destination_cidr = self._ip_and_mask_to_cidr(dest_ip, netmask)
+                    
                     existing_route = self.db.query(Route).filter(Route.router_id == router.id, Route.destination == destination_cidr).first()
                     if not existing_route:
                         db_route = Route(
@@ -954,13 +964,29 @@ class NetworkDiscovery:
         
         return None
     
-    def _to_cidr(self, ip: str, netmask: str) -> str:
-        """Convert IP/netmask to CIDR notation."""
+    def _ip_and_mask_to_cidr(self, ip: str, netmask: str) -> str:
+        """Convert IP and netmask to proper CIDR notation."""
         try:
-            network = ip_network(f"{ip}/{netmask}", strict=False)
-            return str(network)
-        except:
-            return f"{ip}/{netmask}"
+            # Convert netmask to CIDR prefix length
+            mask_parts = netmask.split('.')
+            prefix_length = 0
+            for part in mask_parts:
+                octet = int(part)
+                while octet > 0:
+                    prefix_length += octet & 1
+                    octet >>= 1
+            
+            # Calculate network address
+            ip_parts = [int(part) for part in ip.split('.')]
+            mask_parts = [int(part) for part in netmask.split('.')]
+            network_parts = []
+            for i in range(4):
+                network_parts.append(ip_parts[i] & mask_parts[i])
+            
+            network_ip = '.'.join(str(part) for part in network_parts)
+            return f"{network_ip}/{prefix_length}"
+        except Exception:
+            return f"{ip}/24"  # Fallback
     
     def _is_valid_ip(self, ip: str) -> bool:
         """Check if IP address is valid."""

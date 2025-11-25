@@ -503,9 +503,6 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology, onNav
               <th onClick={() => handleSort("ip_address")} className="sortable">
                 IP Address {sortField === "ip_address" ? (sortOrder === "asc" ? "▲" : "▼") : ""}
               </th>
-              <th onClick={() => handleSort("mac_address")} className="sortable">
-                MAC {sortField === "mac_address" ? (sortOrder === "asc" ? "▲" : "▼") : ""}
-              </th>
               <th onClick={() => handleSort("device_type")} className="sortable">
                 Type {sortField === "device_type" ? (sortOrder === "asc" ? "▲" : "▼") : ""}
               </th>
@@ -517,9 +514,6 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology, onNav
               </th>
               <th>SNMP</th>
               <th>Services</th>
-              <th onClick={() => handleSort("confidence_score")} className="sortable">
-                Conf {sortField === "confidence_score" ? (sortOrder === "asc" ? "▲" : "▼") : ""}
-              </th>
               <th onClick={() => handleSort("last_seen")} className="sortable">
                 Last Seen {sortField === "last_seen" ? (sortOrder === "asc" ? "▲" : "▼") : ""}
               </th>
@@ -529,7 +523,6 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology, onNav
             {filteredDevices.map((device) => (
               <tr key={device.id}>
                 <td className="ip-cell">{device.ip_address}</td>
-                <td className="mac-cell">{device.mac_address || "-"}</td>
                 <td className="type-cell">
                   <span className={`type-badge ${device.device_type || "unknown"}`}>
                     {(device.device_type || "unknown").split("_")[0]}
@@ -630,9 +623,6 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology, onNav
                       })}
                     {!device.open_ports && "-"}
                   </div>
-                </td>
-                <td className="confidence-cell">
-                  {device.confidence_score != null ? (device.confidence_score * 100).toFixed(0) + "%" : "-"}
                 </td>
                 <td className="time-cell">{new Date(device.last_seen).toLocaleString()}</td>
               </tr>
