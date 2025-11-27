@@ -26,10 +26,9 @@ interface Router {
 
 interface RoutingTableProps {
   apiBase: string;
-  onBack: () => void;
 }
 
-function RoutingTable({ apiBase, onBack }: RoutingTableProps) {
+function RoutingTable({ apiBase }: RoutingTableProps) {
   const [data, setData] = useState<RoutingData | null>(null);
   const [routers, setRouters] = useState<Router[]>([]);
   const [selectedRouterId, setSelectedRouterId] = useState<number | null>(null);
@@ -121,30 +120,14 @@ function RoutingTable({ apiBase, onBack }: RoutingTableProps) {
   const selectedRouter = routers.find(r => r.id === selectedRouterId);
 
   return (
-    <div style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
-      <div style={{ marginBottom: "1.5rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+    <div style={{ padding: "1rem", fontFamily: "system-ui, sans-serif" }}>
+      <div style={{ marginBottom: "1rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
-          <button
-            onClick={onBack}
-            style={{
-              padding: "0.5rem 1rem",
-              marginRight: "1rem",
-              backgroundColor: "#6b7280",
-              color: "white",
-              border: "none",
-              borderRadius: "0.375rem",
-              cursor: "pointer",
-              fontSize: "0.875rem",
-              fontWeight: "500",
-            }}
-          >
-            ← Back
-          </button>
           <button
             onClick={loadRoutingTable}
             disabled={refreshing}
             style={{
-              padding: "0.5rem 1rem",
+              padding: "0.375rem 0.75rem",
               backgroundColor: refreshing ? "#9ca3af" : "#3b82f6",
               color: "white",
               border: "none",
@@ -154,11 +137,11 @@ function RoutingTable({ apiBase, onBack }: RoutingTableProps) {
               fontWeight: "500",
             }}
           >
-            {refreshing ? "Refreshing..." : "Refresh"}
+            {refreshing ? "Refreshing..." : "↻ Refresh"}
           </button>
         </div>
-        <h1 style={{ margin: 0, fontSize: "1.5rem", fontWeight: "600" }}>
-          Routing Table
+        <h1 style={{ margin: 0, fontSize: "1.25rem", fontWeight: "600" }}>
+          Routes
         </h1>
         <div style={{ width: "200px" }}>
           <select
@@ -166,16 +149,16 @@ function RoutingTable({ apiBase, onBack }: RoutingTableProps) {
             onChange={(e) => setSelectedRouterId(e.target.value ? parseInt(e.target.value) : null)}
             style={{
               width: "100%",
-              padding: "0.5rem",
-              border: "1px solid #d1d5db",
-              borderRadius: "0.375rem",
+              padding: "0.375rem 0.5rem",
               fontSize: "0.875rem",
-              fontFamily: "monospace"
+              border: "1px solid #d1d5db",
+              borderRadius: "0.375rem"
             }}
           >
+            <option value="">Select Router</option>
             {routers.map((router) => (
               <option key={router.id} value={router.id}>
-                {router.ip_address} {router.hostname ? `(${router.hostname})` : ""}
+                {router.ip_address} - {router.hostname || router.vendor || "Unknown"}
               </option>
             ))}
           </select>

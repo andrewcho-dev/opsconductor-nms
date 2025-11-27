@@ -97,3 +97,28 @@ class TopologyLink(Base):
     discovery_run = relationship("DiscoveryRun")
     from_router = relationship("Router", foreign_keys=[from_router_id])
     to_router = relationship("Router", foreign_keys=[to_router_id])
+
+
+class NetworkLink(Base):
+    __tablename__ = 'network_links'
+    
+    id = Column(String(100), primary_key=True)  # Composite key: from_ip-to_ip
+    from_router_id = Column(Integer, ForeignKey('routers.id'), nullable=False)
+    to_router_id = Column(Integer, ForeignKey('routers.id'), nullable=False)
+    from_ip = Column(String(15), nullable=False)
+    to_ip = Column(String(15), nullable=False)
+    discovery_method = Column(String(20), nullable=False)  # traceroute, routing_table
+    initial_discovery = Column(DateTime, nullable=False)
+    last_verified = Column(DateTime, nullable=False)
+    verification_count = Column(Integer, default=1)
+    latency_ms = Column(Float, nullable=True)
+    hop_count = Column(Integer, nullable=True)
+    status = Column(String(20), default='active')  # active, failed, deprecated
+    color = Column(String(7), nullable=True)  # Hex color code
+    width = Column(Integer, default=2)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    from_router = relationship("Router", foreign_keys=[from_router_id])
+    to_router = relationship("Router", foreign_keys=[to_router_id])

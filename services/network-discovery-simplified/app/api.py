@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from typing import List, Optional
+from datetime import datetime
 
 from .database import get_db
 from .discovery import NetworkDiscovery
-from .models import DiscoveryRun, Router, Route, Network, TopologyLink
+from .models import DiscoveryRun, Router, Route, Network, TopologyLink, NetworkLink
 from .schemas import DiscoveryRequest, DiscoveryStatus, DiscoverySummary
 
 router = APIRouter()
@@ -130,6 +131,74 @@ def get_router_routes(router_id: int, db: Session = Depends(get_db)):
         }
         for r in routes
     ]
+
+
+@router.get("/routers/{router_id}/traceroute/{target_ip}")
+def traceroute_from_router(router_id: int, target_ip: str, db: Session = Depends(get_db)):
+    """Perform traceroute from a router to a target IP."""
+    router = db.query(Router).filter(Router.id == router_id).first()
+    if not router:
+        raise HTTPException(status_code=404, detail="Router not found")
+    
+    try:
+        # Perform traceroute from the router
+        import subprocess
+        result = subprocess.run(
+            ['traceroute', '-n', '-m', '15', '-w', '2', target_ip],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        if result.returncode == 0:
+            # Parse traceroute output
+            hops = []
+            lines = result.stdout.strip().split('\n')
+            
+            for line in lines[1:]:  # Skip first line (header)
+                if line.strip():
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        hop_num = parts[0]
+                        hop_ip = parts[1] if parts[1] != '*' else None
+                        hops.append({
+                            "hop": int(hop_num),
+                            "ip": hop_ip,
+                            "raw_line": line
+                        })
+            
+            return {
+                "source_router": router.ip_address,
+                "target_ip": target_ip,
+                "success": True,
+                "hops": hops,
+                "raw_output": result.stdout
+            }
+        else:
+            return {
+                "source_router": router.ip_address,
+                "target_ip": target_ip,
+                "success": False,
+                "error": result.stderr,
+                "hops": []
+            }
+            
+    except subprocess.TimeoutExpired:
+        return {
+            "source_router": router.ip_address,
+            "target_ip": target_ip,
+            "success": False,
+            "error": "Traceroute timeout",
+            "hops": []
+        }
+    except Exception as e:
+        return {
+            "source_router": router.ip_address,
+            "target_ip": target_ip,
+            "success": False,
+            "error": str(e),
+            "hops": []
+        }
 
 
 def _cidr_to_netmask(cidr_prefix: str) -> str:
@@ -452,3 +521,147 @@ def get_topology(run_id: Optional[int] = None, db: Session = Depends(get_db)):
         "edges": edges,
         "run_id": run_id
     }
+
+
+# NetworkLink endpoints for persistent topology connections
+@router.get("/network-links")
+def get_network_links(db: Session = Depends(get_db)):
+    """Get all persistent network links."""
+    links = db.query(NetworkLink).filter(NetworkLink.status == 'active').all()
+    return [
+        {
+            "id": l.id,
+            "from_router_id": l.from_router_id,
+            "to_router_id": l.to_router_id,
+            "from_ip": l.from_ip,
+            "to_ip": l.to_ip,
+            "discovery_method": l.discovery_method,
+            "initial_discovery": l.initial_discovery,
+            "last_verified": l.last_verified,
+            "verification_count": l.verification_count,
+            "latency_ms": l.latency_ms,
+            "hop_count": l.hop_count,
+            "status": l.status,
+            "color": l.color,
+            "width": l.width
+        }
+        for l in links
+    ]
+
+
+@router.post("/network-links")
+def save_network_link(link_data: dict, db: Session = Depends(get_db)):
+    """Save or update a network link."""
+    try:
+        # Check if link already exists
+        existing_link = db.query(NetworkLink).filter(NetworkLink.id == link_data['id']).first()
+        
+        if existing_link:
+            # Update existing link
+            existing_link.last_verified = datetime.utcnow()
+            existing_link.verification_count += 1
+            if 'latency_ms' in link_data:
+                existing_link.latency_ms = link_data['latency_ms']
+            if 'hop_count' in link_data:
+                existing_link.hop_count = link_data['hop_count']
+            existing_link.updated_at = datetime.utcnow()
+            db.commit()
+            return {"message": "Link updated", "id": existing_link.id}
+        else:
+            # Create new link
+            new_link = NetworkLink(
+                id=link_data['id'],
+                from_router_id=link_data['from_router_id'],
+                to_router_id=link_data['to_router_id'],
+                from_ip=link_data['from_ip'],
+                to_ip=link_data['to_ip'],
+                discovery_method=link_data['discovery_method'],
+                initial_discovery=datetime.utcnow(),
+                last_verified=datetime.utcnow(),
+                verification_count=1,
+                latency_ms=link_data.get('latency_ms'),
+                hop_count=link_data.get('hop_count'),
+                color=link_data.get('color'),
+                width=link_data.get('width', 2)
+            )
+            db.add(new_link)
+            db.commit()
+            return {"message": "Link created", "id": new_link.id}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to save link: {str(e)}")
+
+
+@router.post("/network-links/batch")
+def save_network_links_batch(links_data: List[dict], db: Session = Depends(get_db)):
+    """Save multiple network links in a batch."""
+    try:
+        saved_links = []
+        for link_data in links_data:
+            # Check if link already exists
+            existing_link = db.query(NetworkLink).filter(NetworkLink.id == link_data['id']).first()
+            
+            if existing_link:
+                # Update existing link
+                existing_link.last_verified = datetime.utcnow()
+                existing_link.verification_count += 1
+                if 'latency_ms' in link_data:
+                    existing_link.latency_ms = link_data['latency_ms']
+                if 'hop_count' in link_data:
+                    existing_link.hop_count = link_data['hop_count']
+                existing_link.updated_at = datetime.utcnow()
+                saved_links.append({"id": existing_link.id, "action": "updated"})
+            else:
+                # Create new link
+                new_link = NetworkLink(
+                    id=link_data['id'],
+                    from_router_id=link_data['from_router_id'],
+                    to_router_id=link_data['to_router_id'],
+                    from_ip=link_data['from_ip'],
+                    to_ip=link_data['to_ip'],
+                    discovery_method=link_data['discovery_method'],
+                    initial_discovery=datetime.utcnow(),
+                    last_verified=datetime.utcnow(),
+                    verification_count=1,
+                    latency_ms=link_data.get('latency_ms'),
+                    hop_count=link_data.get('hop_count'),
+                    color=link_data.get('color'),
+                    width=link_data.get('width', 2)
+                )
+                db.add(new_link)
+                saved_links.append({"id": new_link.id, "action": "created"})
+        
+        db.commit()
+        return {"message": f"Saved {len(saved_links)} links", "results": saved_links}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to save links: {str(e)}")
+
+
+@router.delete("/network-links/{link_id}")
+def delete_network_link(link_id: str, db: Session = Depends(get_db)):
+    """Mark a network link as failed (soft delete)."""
+    link = db.query(NetworkLink).filter(NetworkLink.id == link_id).first()
+    if not link:
+        raise HTTPException(status_code=404, detail="Link not found")
+    
+    link.status = 'failed'
+    link.updated_at = datetime.utcnow()
+    db.commit()
+    return {"message": "Link marked as failed", "id": link_id}
+
+
+@router.post("/network-links/verify/{link_id}")
+def verify_network_link(link_id: str, db: Session = Depends(get_db)):
+    """Verify a network link and update its status."""
+    link = db.query(NetworkLink).filter(NetworkLink.id == link_id).first()
+    if not link:
+        raise HTTPException(status_code=404, detail="Link not found")
+    
+    # Here you would implement actual verification logic
+    # For now, just update the verification timestamp
+    link.last_verified = datetime.utcnow()
+    link.verification_count += 1
+    link.updated_at = datetime.utcnow()
+    db.commit()
+    return {"message": "Link verified", "id": link_id, "verification_count": link.verification_count}

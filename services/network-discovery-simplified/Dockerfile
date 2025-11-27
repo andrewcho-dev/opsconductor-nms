@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y \
     sshpass \
     openssh-client \
     expect \
+    traceroute \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first for better caching

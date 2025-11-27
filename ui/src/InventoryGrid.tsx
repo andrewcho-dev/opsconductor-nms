@@ -42,10 +42,7 @@ interface InventoryDevice {
 interface InventoryGridProps {
   apiBase: string;
   onNavigateToAdmin: () => void;
-  onNavigateToTopology: () => void;
-  onNavigateToDiscovery?: () => void;
-  onNavigateToRouting?: () => void;
-  onNavigateToRouterInventory?: () => void;
+  onNavigateToRouting: () => void;
 }
 
 interface SnmpConfig {
@@ -145,7 +142,7 @@ function renderComplexValue(value: any, depth: number = 0): React.ReactNode {
 
 const STATE_SERVER_API_BASE = "http://10.120.0.18:8000";
 
-function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology, onNavigateToDiscovery, onNavigateToRouting, onNavigateToRouterInventory }: InventoryGridProps) {
+function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToRouting }: InventoryGridProps) {
   const [devices, setDevices] = useState<InventoryDevice[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -356,7 +353,7 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology, onNav
       const result = await response.json();
       const mibCount = result.mibs_walked || 1;
       const mibText = mibCount === 1 ? "1 MIB" : `${mibCount} MIBs`;
-      alert(`MIB walk completed successfully!\n\nMIBs walked: ${mibText}\nWalked at: ${new Date(result.walked_at).toLocaleString()}`);
+      alert(`MIB walk completed successfully!\n\nMIBs walked: ${mibText}\nWalked at: ${result.walked_at ? new Date(result.walked_at).toLocaleString() : 'Unknown'}`);
       
       await loadInventory();
       setSnmpModalDevice(null);
@@ -413,86 +410,86 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology, onNav
     <div className="inventory-container">
       <div className="inventory-header">
         <div className="inventory-filters">
-          <div style={{ display: "flex", gap: "1rem", alignItems: "center", marginRight: "1rem" }}>
+          <div style={{ display: "flex", gap: "0.75rem", alignItems: "center", marginRight: "1rem" }}>
             <span
               onClick={() => setFilterRole("")}
               style={{
-                fontWeight: "bold",
+                fontWeight: "500",
                 cursor: "pointer",
                 textDecoration: filterRole === "" ? "underline" : "none",
-                color: filterRole === "" ? "#2563eb" : "inherit"
+                color: filterRole === "" ? "#2563eb" : "#64748b",
+                fontSize: "0.875rem"
               }}
-              title="Show all devices"
             >
-              Total: {devices.length}
+              All: {devices.length}
             </span>
             <span
               onClick={() => setFilterRole("L3")}
               style={{
-                fontWeight: "bold",
+                fontWeight: "500",
                 cursor: "pointer",
                 textDecoration: filterRole === "L3" ? "underline" : "none",
-                color: filterRole === "L3" ? "#2563eb" : "#059669"
+                color: filterRole === "L3" ? "#2563eb" : "#059669",
+                fontSize: "0.875rem"
               }}
-              title="Show L3 routers only"
             >
               L3: {l3Count}
             </span>
             <span
               onClick={() => setFilterRole("L2")}
               style={{
-                fontWeight: "bold",
+                fontWeight: "500",
                 cursor: "pointer",
                 textDecoration: filterRole === "L2" ? "underline" : "none",
-                color: filterRole === "L2" ? "#2563eb" : "#d97706"
+                color: filterRole === "L2" ? "#2563eb" : "#d97706",
+                fontSize: "0.875rem"
               }}
-              title="Show L2 switches only"
             >
               L2: {l2Count}
             </span>
             <span
               onClick={() => setFilterRole("Endpoint")}
               style={{
-                fontWeight: "bold",
+                fontWeight: "500",
                 cursor: "pointer",
                 textDecoration: filterRole === "Endpoint" ? "underline" : "none",
-                color: filterRole === "Endpoint" ? "#2563eb" : "#6b7280"
+                color: filterRole === "Endpoint" ? "#2563eb" : "#6b7280",
+                fontSize: "0.875rem"
               }}
-              title="Show endpoints only"
             >
-              Ends: {endpointCount}
+              End: {endpointCount}
             </span>
           </div>
-          <label>
-            Filter by type:
-            <select value={filterType} onChange={(e) => setFilterType(e.target.value)}>
-              <option value="">All</option>
-              {deviceTypes.map((type) => (
-                <option key={type} value={type || ""}>
-                  {type}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button onClick={loadInventory} className="refresh-btn">
-            Refresh
-          </button>
-          <button onClick={onNavigateToRouterInventory} className="admin-btn" style={{ backgroundColor: "#8b5cf6" }}>
-            Router Inventory
-          </button>
-          <button onClick={onNavigateToRouting} className="admin-btn" style={{ backgroundColor: "#10b981" }}>
-            Routing Table
-          </button>
-          <button onClick={onNavigateToTopology} className="admin-btn" style={{ backgroundColor: "#7c3aed" }}>
-            Topology
-          </button>
-          {onNavigateToDiscovery && (
-            <button onClick={onNavigateToDiscovery} className="admin-btn" style={{ backgroundColor: "#06b6d4" }}>
-              Discovery
-            </button>
-          )}
-          <button onClick={onNavigateToAdmin} className="admin-btn">
-            Admin
+          <select 
+            value={filterType} 
+            onChange={(e) => setFilterType(e.target.value)}
+            style={{
+              padding: "0.25rem 0.5rem",
+              fontSize: "0.875rem",
+              border: "1px solid #d1d5db",
+              borderRadius: "0.25rem"
+            }}
+          >
+            <option value="">All Types</option>
+            {deviceTypes.map((type) => (
+              <option key={type} value={type || ""}>
+                {type}
+              </option>
+            ))}
+          </select>
+          <button 
+            onClick={loadInventory} 
+            style={{
+              padding: "0.25rem 0.75rem",
+              fontSize: "0.875rem",
+              backgroundColor: "#3b82f6",
+              color: "white",
+              border: "none",
+              borderRadius: "0.25rem",
+              cursor: "pointer"
+            }}
+          >
+            ↻ Refresh
           </button>
         </div>
       </div>
@@ -624,7 +621,7 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology, onNav
                     {!device.open_ports && "-"}
                   </div>
                 </td>
-                <td className="time-cell">{new Date(device.last_seen).toLocaleString()}</td>
+                <td className="time-cell">{device.last_seen ? new Date(device.last_seen).toLocaleString() : "-"}</td>
               </tr>
             ))}
           </tbody>
@@ -806,7 +803,7 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToTopology, onNav
                       )}
                       {snmpModalDevice.nmap_scan_time && (
                         <div style={{ marginBottom: "0.5rem", fontSize: "0.85rem", color: "#6b7280" }}>
-                          <strong>Last Scan:</strong> {new Date(snmpModalDevice.nmap_scan_time).toLocaleString()}
+                          <strong>Last Scan:</strong> {snmpModalDevice.nmap_scan_time ? new Date(snmpModalDevice.nmap_scan_time).toLocaleString() : 'Never'}
                         </div>
                       )}
                       {snmpModalDevice.os_detection && snmpModalDevice.os_detection.length > 0 && (

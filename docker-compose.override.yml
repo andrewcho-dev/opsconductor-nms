@@ -1,13 +1,28 @@
-# CPU-only mode - disables GPU-dependent services
+# Docker Compose Override for Development
+# This file extends docker-compose.yml for local development
+# Use with: docker compose up -d
+
 services:
-  vllm:
-    deploy:
-      resources:
-        reservations: {}
-    profiles:
-      - disabled
-    
-  analyst:
-    profiles:
-      - disabled
-  
+  network-discovery:
+    volumes:
+      - ./services/network-discovery-simplified:/app
+    environment:
+      - LOG_LEVEL=DEBUG
+      - SQL_ECHO=true
+    ports:
+      - "8001:8000"  # Alternative port for development
+
+  ui:
+    volumes:
+      - ./ui:/app
+      - /app/node_modules
+    environment:
+      - VITE_API_BASE=http://localhost:8001
+    ports:
+      - "3001:3000"  # Alternative port for development
+
+  postgres:
+    ports:
+      - "5434:5432"  # Alternative port for development
+    environment:
+      - POSTGRES_DB=opsconductor_dev

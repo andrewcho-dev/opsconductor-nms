@@ -1,4 +1,0 @@
-httpx
-pysnmp
-pysmi
-aiohttp

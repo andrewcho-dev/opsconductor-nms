@@ -2,7 +2,6 @@ import { useState, useEffect } from "react";
 
 interface AdminProps {
   apiBase: string;
-  onBack: () => void;
 }
 
 interface OUIStatus {
@@ -25,7 +24,7 @@ interface MIB {
   uploaded_at: string;
 }
 
-function Admin({ apiBase, onBack }: AdminProps) {
+function Admin({ apiBase }: AdminProps) {
   const [ouiStatus, setOuiStatus] = useState<OUIStatus | null>(null);
   const [ouiLoading, setOuiLoading] = useState(false);
   const [ouiMessage, setOuiMessage] = useState("");
@@ -182,9 +181,6 @@ function Admin({ apiBase, onBack }: AdminProps) {
   return (
     <div className="admin-container">
       <div className="admin-header">
-        <button className="back-button" onClick={onBack}>
-          ← Back to Inventory
-        </button>
         <h1>System Administration</h1>
       </div>
 
@@ -200,7 +196,7 @@ function Admin({ apiBase, onBack }: AdminProps) {
               </div>
               <div className="status-row">
                 <span className="status-label">Entries:</span>
-                <span className="status-value">{ouiStatus.oui_entries.toLocaleString()}</span>
+                <span className="status-value">{ouiStatus.oui_entries?.toLocaleString() || "0"}</span>
               </div>
               <div className="status-row">
                 <span className="status-label">File:</span>
@@ -210,7 +206,7 @@ function Admin({ apiBase, onBack }: AdminProps) {
                 <span className="status-label">Exists:</span>
                 <span className="status-value">{ouiStatus.oui_exists ? "Yes" : "No"}</span>
               </div>
-              {ouiStatus.oui_age_days !== null && (
+              {ouiStatus.oui_age_days && (
                 <div className="status-row">
                   <span className="status-label">Age:</span>
                   <span className="status-value">
