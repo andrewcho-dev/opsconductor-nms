@@ -5,8 +5,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .database import init_db
 from .api import router as discovery_router
+from .error_handling import error_handling_middleware
 
-# Setup logging
+# Setup basic logging (will be overridden by our custom logger)
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -19,6 +20,9 @@ app = FastAPI(
     description="Simplified network router discovery and topology mapping",
     version="1.0.0"
 )
+
+# Add error handling middleware (must be first)
+app.middleware("http")(error_handling_middleware)
 
 # Add CORS middleware
 app.add_middleware(

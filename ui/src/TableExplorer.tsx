@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import DataTable, { TableColumnMeta } from "./components/DataTable";
+import { useErrorHandler, ErrorDisplay, LoadingSpinner, apiCall } from "./utils/errorHandling";
 
 interface TableExplorerProps {
   apiBase: string;
@@ -39,8 +40,8 @@ const TableExplorer = ({ apiBase }: TableExplorerProps) => {
   const [limit, setLimit] = useState(100);
   const [offset, setOffset] = useState(0);
   const [tableData, setTableData] = useState<TableResponse | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+
+  const { error, isLoading, clearError, wrapAsync } = useErrorHandler();
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(search), 300);
@@ -60,44 +61,26 @@ const TableExplorer = ({ apiBase }: TableExplorerProps) => {
   }, [selectedTable, selectedRun, debouncedSearch, limit, offset]);
 
   const fetchRuns = async () => {
-    try {
-      const response = await fetch(`${apiBase}/api/discover`);
-      if (!response.ok) return;
-      const data = await response.json();
+    await wrapAsync(async () => {
+      const data = await apiCall<DiscoveryRunSummary[]>(`${apiBase}/api/discover`);
       setRuns(data || []);
-    } catch (err) {
-      console.error("Failed to load discovery runs", err);
-    }
+    }, false); // Don't show loading for background fetch
   };
 
   const fetchTable = async () => {
-    setLoading(true);
-    setError(null);
     const params = new URLSearchParams({
       table: selectedTable,
       limit: String(limit),
       offset: String(offset),
     });
-    if (selectedRun) {
-      params.append("run_id", selectedRun);
-    }
-    if (debouncedSearch) {
-      params.append("search", debouncedSearch);
-    }
 
-    try {
-      const response = await fetch(`${apiBase}/api/tables?${params.toString()}`);
-      if (!response.ok) {
-        throw new Error("Failed to load table data");
-      }
-      const data: TableResponse = await response.json();
+    if (selectedRun) params.set('run_id', selectedRun);
+    if (debouncedSearch) params.set('search', debouncedSearch);
+
+    await wrapAsync(async () => {
+      const data = await apiCall<TableResponse>(`${apiBase}/api/tables?${params}`);
       setTableData(data);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error");
-      setTableData(null);
-    } finally {
-      setLoading(false);
-    }
+    });
   };
 
   const totalPages = useMemo(() => {
@@ -144,15 +127,15 @@ const TableExplorer = ({ apiBase }: TableExplorerProps) => {
             </option>
           ))}
         </select>
-        <button onClick={() => fetchTable()} disabled={loading}>
-          {loading ? "Loading…" : "Refresh"}
+        <button onClick={() => fetchTable()} disabled={isLoading}>
+          {isLoading ? "Loading…" : "Refresh"}
         </button>
         <span>
           {tableData ? `${tableData.rows.length}/${tableData.total}` : "0/0"}
         </span>
         <button
           onClick={() => setOffset(Math.max(0, offset - limit))}
-          disabled={offset === 0 || loading}
+          disabled={offset === 0 || isLoading}
         >
           Prev
         </button>
@@ -161,13 +144,15 @@ const TableExplorer = ({ apiBase }: TableExplorerProps) => {
         </span>
         <button
           onClick={() => setOffset(offset + limit)}
-          disabled={loading || (tableData ? offset + limit >= tableData.total : true)}
+          disabled={isLoading || (tableData ? offset + limit >= tableData.total : true)}
         >
           Next
         </button>
       </div>
 
-      {error && <div className="table-explorer__error">{error}</div>}
+      {error && <ErrorDisplay error={error} onDismiss={clearError} />}
+
+      {isLoading && <LoadingSpinner message="Loading table data..." />}
 
       {tableData && !error && (
         <DataTable

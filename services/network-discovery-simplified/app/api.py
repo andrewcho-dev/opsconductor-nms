@@ -8,6 +8,12 @@ from .database import get_db
 from .discovery import NetworkDiscovery
 from .models import DiscoveryRun, Router, Route, Network, TopologyLink, NetworkLink
 from .schemas import DiscoveryRequest, DiscoveryStatus, DiscoverySummary
+from .error_handling import (
+    NMSError, ValidationError, ResourceNotFoundError, DatabaseError,
+    NetworkError, DiscoveryError, AuthenticationError, PermissionError,
+    handle_database_operation, validate_discovery_request,
+    create_success_response, create_paginated_response, logger
+)
 
 router = APIRouter()
 
@@ -139,23 +145,41 @@ def traceroute_from_router(router_id: int, target_ip: str, db: Session = Depends
     """Perform traceroute from a router to a target IP."""
     router = db.query(Router).filter(Router.id == router_id).first()
     if not router:
-        raise HTTPException(status_code=404, detail="Router not found")
-    
+        raise ResourceNotFoundError(
+            resource_type="Router",
+            resource_id=router_id
+        )
+
+    # Validate target IP
     try:
-        # Perform traceroute from the router
+        from ipaddress import IPv4Address
+        IPv4Address(target_ip)
+    except ValueError:
+        raise ValidationError(
+            message=f"Invalid target IP address: {target_ip}",
+            field="target_ip"
+        )
+
+    try:
+        import shlex
         import subprocess
+
+        logger.info(f"Performing traceroute from {router.ip_address} to {target_ip}")
+
+        # Execute traceroute with proper input sanitization
+        cmd = ['traceroute', '-n', '-m', '15', '-w', '2', target_ip]
         result = subprocess.run(
-            ['traceroute', '-n', '-m', '15', '-w', '2', target_ip],
+            cmd,
             capture_output=True,
             text=True,
             timeout=30
         )
-        
+
         if result.returncode == 0:
             # Parse traceroute output
             hops = []
             lines = result.stdout.strip().split('\n')
-            
+
             for line in lines[1:]:  # Skip first line (header)
                 if line.strip():
                     parts = line.split()
@@ -167,39 +191,42 @@ def traceroute_from_router(router_id: int, target_ip: str, db: Session = Depends
                             "ip": hop_ip,
                             "raw_line": line
                         })
-            
-            return {
+
+            logger.info(f"Traceroute completed successfully: {len(hops)} hops found")
+            return create_success_response({
                 "source_router": router.ip_address,
                 "target_ip": target_ip,
                 "success": True,
                 "hops": hops,
                 "raw_output": result.stdout
-            }
+            }, "Traceroute completed successfully")
+
         else:
-            return {
+            logger.warning(f"Traceroute failed with exit code {result.returncode}: {result.stderr}")
+            return create_success_response({
                 "source_router": router.ip_address,
                 "target_ip": target_ip,
                 "success": False,
-                "error": result.stderr,
+                "error": result.stderr or "Traceroute command failed",
                 "hops": []
-            }
-            
+            }, "Traceroute failed")
+
     except subprocess.TimeoutExpired:
-        return {
-            "source_router": router.ip_address,
-            "target_ip": target_ip,
-            "success": False,
-            "error": "Traceroute timeout",
-            "hops": []
-        }
+        logger.error(f"Traceroute timeout for target {target_ip}")
+        raise NetworkError(
+            message=f"Traceroute to {target_ip} timed out",
+            target=target_ip,
+            user_message="Traceroute timed out. The target may be unreachable.",
+            troubleshooting="Check network connectivity and target availability."
+        )
     except Exception as e:
-        return {
-            "source_router": router.ip_address,
-            "target_ip": target_ip,
-            "success": False,
-            "error": str(e),
-            "hops": []
-        }
+        logger.error(f"Unexpected error in traceroute: {str(e)}", exc_info=True)
+        raise NetworkError(
+            message=f"Traceroute error: {str(e)}",
+            target=target_ip,
+            user_message="Unable to perform traceroute.",
+            troubleshooting="Check system configuration and try again."
+        )
 
 
 def _cidr_to_netmask(cidr_prefix: str) -> str:
@@ -269,28 +296,31 @@ def get_router_networks(router_id: int, db: Session = Depends(get_db)):
 @router.post("/discover", response_model=DiscoveryStatus)
 def start_discovery(request: DiscoveryRequest, db: Session = Depends(get_db)):
     """Start network discovery from root IP."""
-    global current_discovery
-    
-    # NOTE: Removed single discovery restriction to enable parallel discoveries
-    
-    # Validate root IP
     try:
-        from ipaddress import IPv4Address
-        IPv4Address(request.root_ip)
-    except:
-        raise HTTPException(status_code=400, detail="Invalid IP address")
-    
-    # Start discovery
-    discovery = NetworkDiscovery(db)
-    try:
+        # Validate request
+        validate_discovery_request(request.root_ip, request.snmp_community)
+
+        logger.info(f"Starting discovery for root IP: {request.root_ip}")
+
+        # Start discovery
+        discovery = NetworkDiscovery(db)
         run_id = discovery.start_discovery(
             root_ip=request.root_ip,
             snmp_community=request.snmp_community,
             ssh_credentials=request.ssh_credentials
         )
-        
+
         # Get the created run
         run = db.query(DiscoveryRun).filter(DiscoveryRun.id == run_id).first()
+        if not run:
+            raise DiscoveryError(
+                message="Discovery run was created but could not be retrieved",
+                discovery_run_id=run_id,
+                user_message="Discovery failed to start properly."
+            )
+
+        logger.info(f"Discovery started successfully with run ID: {run_id}")
+
         return DiscoveryStatus(
             id=run.id,
             status=run.status,
@@ -302,9 +332,16 @@ def start_discovery(request: DiscoveryRequest, db: Session = Depends(get_db)):
             routes_found=run.routes_found,
             networks_found=run.networks_found
         )
-        
+
+    except ValidationError:
+        # Re-raise validation errors as-is
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Unexpected error starting discovery: {str(e)}", exc_info=True)
+        raise DiscoveryError(
+            message=f"Failed to start discovery: {str(e)}",
+            user_message="Unable to start network discovery. Please try again."
+        )
 
 
 @router.get("/discover/{run_id}", response_model=DiscoveryStatus)
@@ -312,8 +349,11 @@ def get_discovery_status(run_id: int, db: Session = Depends(get_db)):
     """Get discovery run status."""
     run = db.query(DiscoveryRun).filter(DiscoveryRun.id == run_id).first()
     if not run:
-        raise HTTPException(status_code=404, detail="Discovery run not found")
-    
+        raise ResourceNotFoundError(
+            resource_type="Discovery Run",
+            resource_id=run_id
+        )
+
     return DiscoveryStatus(
         id=run.id,
         status=run.status,
