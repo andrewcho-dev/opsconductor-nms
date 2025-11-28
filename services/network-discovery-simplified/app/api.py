@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from sqlalchemy import or_
+from typing import List, Optional, Dict, Any
 from datetime import datetime
 
 from .database import get_db
@@ -520,6 +521,444 @@ def get_topology(run_id: Optional[int] = None, db: Session = Depends(get_db)):
         "nodes": nodes,
         "edges": edges,
         "run_id": run_id
+    }
+
+
+def _serialize_datetime(value: Optional[datetime]) -> Optional[str]:
+    return value.isoformat() if value else None
+
+
+TABLE_DEFINITIONS: Dict[str, Dict[str, Any]] = {
+    "discovery_runs": {
+        "columns": [
+            {"id": "id", "label": "Run ID", "type": "number"},
+            {"id": "root_ip", "label": "Root IP", "type": "text"},
+            {"id": "status", "label": "Status", "type": "badge"},
+            {"id": "routers_found", "label": "Routers", "type": "number"},
+            {"id": "routes_found", "label": "Routes", "type": "number"},
+            {"id": "networks_found", "label": "Networks", "type": "number"},
+            {"id": "started_at", "label": "Started", "type": "datetime"},
+            {"id": "finished_at", "label": "Finished", "type": "datetime"},
+        ],
+        "query": lambda db: db.query(DiscoveryRun),
+        "serializer": lambda run: {
+            "id": run.id,
+            "root_ip": run.root_ip,
+            "status": run.status,
+            "routers_found": run.routers_found,
+            "routes_found": run.routes_found,
+            "networks_found": run.networks_found,
+            "started_at": _serialize_datetime(run.started_at),
+            "finished_at": _serialize_datetime(run.finished_at),
+        },
+        "search_fields": [DiscoveryRun.root_ip, DiscoveryRun.status],
+        "order_by": DiscoveryRun.started_at.desc(),
+        "supports_run_filter": False,
+    },
+    "routers": {
+        "columns": [
+            {"id": "id", "label": "Router ID", "type": "number"},
+            {"id": "discovery_run_id", "label": "Run", "type": "number"},
+            {"id": "ip_address", "label": "IP Address", "type": "mono"},
+            {"id": "hostname", "label": "Hostname", "type": "text"},
+            {"id": "vendor", "label": "Vendor", "type": "badge"},
+            {"id": "model", "label": "Model", "type": "text"},
+            {"id": "discovered_via", "label": "Method", "type": "badge"},
+            {"id": "router_score", "label": "Score", "type": "number"},
+            {"id": "created_at", "label": "Discovered", "type": "datetime"},
+        ],
+        "query": lambda db: db.query(Router),
+        "serializer": lambda router: {
+            "id": router.id,
+            "discovery_run_id": router.discovery_run_id,
+            "ip_address": router.ip_address,
+            "hostname": router.hostname,
+            "vendor": router.vendor,
+            "model": router.model,
+            "discovered_via": router.discovered_via,
+            "router_score": router.router_score,
+            "created_at": _serialize_datetime(router.created_at),
+        },
+        "search_fields": [Router.ip_address, Router.hostname, Router.vendor, Router.model],
+        "order_by": Router.created_at.desc(),
+        "supports_run_filter": True,
+        "run_column": Router.discovery_run_id,
+    },
+    "routes": {
+        "columns": [
+            {"id": "id", "label": "Route ID", "type": "number"},
+            {"id": "discovery_run_id", "label": "Run", "type": "number"},
+            {"id": "router_id", "label": "Router", "type": "number"},
+            {"id": "destination", "label": "Destination", "type": "mono"},
+            {"id": "next_hop", "label": "Next Hop", "type": "mono"},
+            {"id": "protocol", "label": "Protocol", "type": "badge"},
+            {"id": "discovered_via", "label": "Method", "type": "badge"},
+            {"id": "created_at", "label": "Recorded", "type": "datetime"},
+        ],
+        "query": lambda db: db.query(Route),
+        "serializer": lambda route: {
+            "id": route.id,
+            "discovery_run_id": route.discovery_run_id,
+            "router_id": route.router_id,
+            "destination": route.destination,
+            "next_hop": route.next_hop,
+            "protocol": route.protocol,
+            "discovered_via": route.discovered_via,
+            "created_at": _serialize_datetime(route.created_at),
+        },
+        "search_fields": [Route.destination, Route.next_hop, Route.protocol],
+        "order_by": Route.created_at.desc(),
+        "supports_run_filter": True,
+        "run_column": Route.discovery_run_id,
+    },
+    "networks": {
+        "columns": [
+            {"id": "id", "label": "Network ID", "type": "number"},
+            {"id": "discovery_run_id", "label": "Run", "type": "number"},
+            {"id": "router_id", "label": "Router", "type": "number"},
+            {"id": "network", "label": "Network", "type": "mono"},
+            {"id": "interface", "label": "Interface", "type": "text"},
+            {"id": "is_connected", "label": "Connected", "type": "boolean"},
+            {"id": "created_at", "label": "Recorded", "type": "datetime"},
+        ],
+        "query": lambda db: db.query(Network),
+        "serializer": lambda network: {
+            "id": network.id,
+            "discovery_run_id": network.discovery_run_id,
+            "router_id": network.router_id,
+            "network": network.network,
+            "interface": network.interface,
+            "is_connected": network.is_connected,
+            "created_at": _serialize_datetime(network.created_at),
+        },
+        "search_fields": [Network.network, Network.interface],
+        "order_by": Network.created_at.desc(),
+        "supports_run_filter": True,
+        "run_column": Network.discovery_run_id,
+    },
+    "topology_links": {
+        "columns": [
+            {"id": "id", "label": "Link ID", "type": "number"},
+            {"id": "discovery_run_id", "label": "Run", "type": "number"},
+            {"id": "from_router_id", "label": "From Router", "type": "number"},
+            {"id": "to_router_id", "label": "To Router", "type": "number"},
+            {"id": "shared_network", "label": "Network", "type": "mono"},
+            {"id": "link_type", "label": "Type", "type": "badge"},
+            {"id": "created_at", "label": "Recorded", "type": "datetime"},
+        ],
+        "query": lambda db: db.query(TopologyLink),
+        "serializer": lambda link: {
+            "id": link.id,
+            "discovery_run_id": link.discovery_run_id,
+            "from_router_id": link.from_router_id,
+            "to_router_id": link.to_router_id,
+            "shared_network": link.shared_network,
+            "link_type": link.link_type,
+            "created_at": _serialize_datetime(link.created_at),
+        },
+        "search_fields": [TopologyLink.shared_network, TopologyLink.link_type],
+        "order_by": TopologyLink.created_at.desc(),
+        "supports_run_filter": True,
+        "run_column": TopologyLink.discovery_run_id,
+    },
+    "network_links": {
+        "columns": [
+            {"id": "id", "label": "Link ID", "type": "text"},
+            {"id": "from_router_id", "label": "From Router", "type": "number"},
+            {"id": "to_router_id", "label": "To Router", "type": "number"},
+            {"id": "from_ip", "label": "From IP", "type": "mono"},
+            {"id": "to_ip", "label": "To IP", "type": "mono"},
+            {"id": "discovery_method", "label": "Method", "type": "badge"},
+            {"id": "latency_ms", "label": "Latency (ms)", "type": "number"},
+            {"id": "hop_count", "label": "Hops", "type": "number"},
+            {"id": "status", "label": "Status", "type": "badge"},
+            {"id": "last_verified", "label": "Last Verified", "type": "datetime"},
+        ],
+        "query": lambda db: db.query(NetworkLink),
+        "serializer": lambda link: {
+            "id": link.id,
+            "from_router_id": link.from_router_id,
+            "to_router_id": link.to_router_id,
+            "from_ip": link.from_ip,
+            "to_ip": link.to_ip,
+            "discovery_method": link.discovery_method,
+            "latency_ms": link.latency_ms,
+            "hop_count": link.hop_count,
+            "status": link.status,
+            "last_verified": _serialize_datetime(link.last_verified),
+        },
+        "search_fields": [NetworkLink.from_ip, NetworkLink.to_ip, NetworkLink.discovery_method, NetworkLink.status],
+        "order_by": NetworkLink.last_verified.desc(),
+        "supports_run_filter": False,
+    },
+}
+
+
+@router.get("/tables")
+def get_table_data(
+    table: str,
+    run_id: Optional[int] = None,
+    search: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+):
+    table_key = table.lower()
+    if table_key not in TABLE_DEFINITIONS:
+        raise HTTPException(status_code=400, detail="Unsupported table")
+    config = TABLE_DEFINITIONS[table_key]
+
+    limit = max(10, min(limit, 500))
+    offset = max(offset, 0)
+
+    query = config["query"](db)
+
+    if run_id is not None and config.get("supports_run_filter"):
+        run_column = config.get("run_column")
+        if run_column is not None:
+            query = query.filter(run_column == run_id)
+
+    if search:
+        search_fields = config.get("search_fields", [])
+        clauses = [field.ilike(f"%{search}%") for field in search_fields]
+        if clauses:
+            query = query.filter(or_(*clauses))
+
+    total = query.count()
+
+    order_by = config.get("order_by")
+    if order_by is not None:
+        query = query.order_by(order_by)
+
+    records = query.offset(offset).limit(limit).all()
+    rows = [config["serializer"](record) for record in records]
+
+    return {
+        "table": table_key,
+        "columns": config["columns"],
+        "rows": rows,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+def _serialize_datetime(value: Optional[datetime]) -> Optional[str]:
+    return value.isoformat() if value else None
+
+
+TABLE_DEFINITIONS: Dict[str, Dict[str, Any]] = {
+    "discovery_runs": {
+        "columns": [
+            {"id": "id", "label": "Run ID", "type": "number"},
+            {"id": "root_ip", "label": "Root IP", "type": "text"},
+            {"id": "status", "label": "Status", "type": "badge"},
+            {"id": "routers_found", "label": "Routers", "type": "number"},
+            {"id": "routes_found", "label": "Routes", "type": "number"},
+            {"id": "networks_found", "label": "Networks", "type": "number"},
+            {"id": "started_at", "label": "Started", "type": "datetime"},
+            {"id": "finished_at", "label": "Finished", "type": "datetime"},
+        ],
+        "query": lambda db: db.query(DiscoveryRun),
+        "serializer": lambda run: {
+            "id": run.id,
+            "root_ip": run.root_ip,
+            "status": run.status,
+            "routers_found": run.routers_found,
+            "routes_found": run.routes_found,
+            "networks_found": run.networks_found,
+            "started_at": _serialize_datetime(run.started_at),
+            "finished_at": _serialize_datetime(run.finished_at),
+        },
+        "search_fields": [DiscoveryRun.root_ip, DiscoveryRun.status],
+        "order_by": DiscoveryRun.started_at.desc(),
+        "supports_run_filter": False,
+    },
+    "routers": {
+        "columns": [
+            {"id": "id", "label": "Router ID", "type": "number"},
+            {"id": "discovery_run_id", "label": "Run", "type": "number"},
+            {"id": "ip_address", "label": "IP Address", "type": "mono"},
+            {"id": "hostname", "label": "Hostname", "type": "text"},
+            {"id": "vendor", "label": "Vendor", "type": "badge"},
+            {"id": "model", "label": "Model", "type": "text"},
+            {"id": "discovered_via", "label": "Method", "type": "badge"},
+            {"id": "router_score", "label": "Score", "type": "number"},
+            {"id": "created_at", "label": "Discovered", "type": "datetime"},
+        ],
+        "query": lambda db: db.query(Router),
+        "serializer": lambda router: {
+            "id": router.id,
+            "discovery_run_id": router.discovery_run_id,
+            "ip_address": router.ip_address,
+            "hostname": router.hostname,
+            "vendor": router.vendor,
+            "model": router.model,
+            "discovered_via": router.discovered_via,
+            "router_score": router.router_score,
+            "created_at": _serialize_datetime(router.created_at),
+        },
+        "search_fields": [Router.ip_address, Router.hostname, Router.vendor, Router.model],
+        "order_by": Router.created_at.desc(),
+        "supports_run_filter": True,
+        "run_column": Router.discovery_run_id,
+    },
+    "routes": {
+        "columns": [
+            {"id": "id", "label": "Route ID", "type": "number"},
+            {"id": "discovery_run_id", "label": "Run", "type": "number"},
+            {"id": "router_id", "label": "Router", "type": "number"},
+            {"id": "destination", "label": "Destination", "type": "mono"},
+            {"id": "next_hop", "label": "Next Hop", "type": "mono"},
+            {"id": "protocol", "label": "Protocol", "type": "badge"},
+            {"id": "discovered_via", "label": "Method", "type": "badge"},
+            {"id": "created_at", "label": "Recorded", "type": "datetime"},
+        ],
+        "query": lambda db: db.query(Route),
+        "serializer": lambda route: {
+            "id": route.id,
+            "discovery_run_id": route.discovery_run_id,
+            "router_id": route.router_id,
+            "destination": route.destination,
+            "next_hop": route.next_hop,
+            "protocol": route.protocol,
+            "discovered_via": route.discovered_via,
+            "created_at": _serialize_datetime(route.created_at),
+        },
+        "search_fields": [Route.destination, Route.next_hop, Route.protocol],
+        "order_by": Route.created_at.desc(),
+        "supports_run_filter": True,
+        "run_column": Route.discovery_run_id,
+    },
+    "networks": {
+        "columns": [
+            {"id": "id", "label": "Network ID", "type": "number"},
+            {"id": "discovery_run_id", "label": "Run", "type": "number"},
+            {"id": "router_id", "label": "Router", "type": "number"},
+            {"id": "network", "label": "Network", "type": "mono"},
+            {"id": "interface", "label": "Interface", "type": "text"},
+            {"id": "is_connected", "label": "Connected", "type": "boolean"},
+            {"id": "created_at", "label": "Recorded", "type": "datetime"},
+        ],
+        "query": lambda db: db.query(Network),
+        "serializer": lambda network: {
+            "id": network.id,
+            "discovery_run_id": network.discovery_run_id,
+            "router_id": network.router_id,
+            "network": network.network,
+            "interface": network.interface,
+            "is_connected": network.is_connected,
+            "created_at": _serialize_datetime(network.created_at),
+        },
+        "search_fields": [Network.network, Network.interface],
+        "order_by": Network.created_at.desc(),
+        "supports_run_filter": True,
+        "run_column": Network.discovery_run_id,
+    },
+    "topology_links": {
+        "columns": [
+            {"id": "id", "label": "Link ID", "type": "number"},
+            {"id": "discovery_run_id", "label": "Run", "type": "number"},
+            {"id": "from_router_id", "label": "From Router", "type": "number"},
+            {"id": "to_router_id", "label": "To Router", "type": "number"},
+            {"id": "shared_network", "label": "Network", "type": "mono"},
+            {"id": "link_type", "label": "Type", "type": "badge"},
+            {"id": "created_at", "label": "Recorded", "type": "datetime"},
+        ],
+        "query": lambda db: db.query(TopologyLink),
+        "serializer": lambda link: {
+            "id": link.id,
+            "discovery_run_id": link.discovery_run_id,
+            "from_router_id": link.from_router_id,
+            "to_router_id": link.to_router_id,
+            "shared_network": link.shared_network,
+            "link_type": link.link_type,
+            "created_at": _serialize_datetime(link.created_at),
+        },
+        "search_fields": [TopologyLink.shared_network, TopologyLink.link_type],
+        "order_by": TopologyLink.created_at.desc(),
+        "supports_run_filter": True,
+        "run_column": TopologyLink.discovery_run_id,
+    },
+    "network_links": {
+        "columns": [
+            {"id": "id", "label": "Link ID", "type": "text"},
+            {"id": "from_router_id", "label": "From Router", "type": "number"},
+            {"id": "to_router_id", "label": "To Router", "type": "number"},
+            {"id": "from_ip", "label": "From IP", "type": "mono"},
+            {"id": "to_ip", "label": "To IP", "type": "mono"},
+            {"id": "discovery_method", "label": "Method", "type": "badge"},
+            {"id": "latency_ms", "label": "Latency (ms)", "type": "number"},
+            {"id": "hop_count", "label": "Hops", "type": "number"},
+            {"id": "status", "label": "Status", "type": "badge"},
+            {"id": "last_verified", "label": "Last Verified", "type": "datetime"},
+        ],
+        "query": lambda db: db.query(NetworkLink),
+        "serializer": lambda link: {
+            "id": link.id,
+            "from_router_id": link.from_router_id,
+            "to_router_id": link.to_router_id,
+            "from_ip": link.from_ip,
+            "to_ip": link.to_ip,
+            "discovery_method": link.discovery_method,
+            "latency_ms": link.latency_ms,
+            "hop_count": link.hop_count,
+            "status": link.status,
+            "last_verified": _serialize_datetime(link.last_verified),
+        },
+        "search_fields": [NetworkLink.from_ip, NetworkLink.to_ip, NetworkLink.discovery_method, NetworkLink.status],
+        "order_by": NetworkLink.last_verified.desc(),
+        "supports_run_filter": False,
+    },
+}
+
+
+@router.get("/tables")
+def get_table_data(
+    table: str,
+    run_id: Optional[int] = None,
+    search: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+):
+    table_key = table.lower()
+    if table_key not in TABLE_DEFINITIONS:
+        raise HTTPException(status_code=400, detail="Unsupported table")
+    config = TABLE_DEFINITIONS[table_key]
+
+    limit = max(10, min(limit, 500))
+    offset = max(offset, 0)
+
+    query = config["query"](db)
+
+    if run_id is not None and config.get("supports_run_filter"):
+        run_column = config.get("run_column")
+        if run_column is not None:
+            query = query.filter(run_column == run_id)
+
+    if search:
+        search_fields = config.get("search_fields", [])
+        clauses = [field.ilike(f"%{search}%") for field in search_fields]
+        if clauses:
+            query = query.filter(or_(*clauses))
+
+    total = query.count()
+
+    order_by = config.get("order_by")
+    if order_by is not None:
+        query = query.order_by(order_by)
+
+    records = query.offset(offset).limit(limit).all()
+    rows = [config["serializer"](record) for record in records]
+
+    return {
+        "table": table_key,
+        "columns": config["columns"],
+        "rows": rows,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
     }
 
 

@@ -120,30 +120,12 @@ function RoutingTable({ apiBase }: RoutingTableProps) {
   const selectedRouter = routers.find(r => r.id === selectedRouterId);
 
   return (
-    <div style={{ padding: "1rem", fontFamily: "system-ui, sans-serif" }}>
-      <div style={{ marginBottom: "1rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div>
-          <button
-            onClick={loadRoutingTable}
-            disabled={refreshing}
-            style={{
-              padding: "0.375rem 0.75rem",
-              backgroundColor: refreshing ? "#9ca3af" : "#3b82f6",
-              color: "white",
-              border: "none",
-              borderRadius: "0.375rem",
-              cursor: refreshing ? "not-allowed" : "pointer",
-              fontSize: "0.875rem",
-              fontWeight: "500",
-            }}
-          >
-            {refreshing ? "Refreshing..." : "↻ Refresh"}
-          </button>
-        </div>
-        <h1 style={{ margin: 0, fontSize: "1.25rem", fontWeight: "600" }}>
+    <div className="inventory-container">
+      <div className="inventory-header">
+        <h2 style={{ margin: 0, color: "#0f172a", fontSize: "1.125rem" }}>
           Routes
-        </h1>
-        <div style={{ width: "200px" }}>
+        </h2>
+        <div className="inventory-filters">
           <select
             value={selectedRouterId || ""}
             onChange={(e) => setSelectedRouterId(e.target.value ? parseInt(e.target.value) : null)}
@@ -155,27 +137,27 @@ function RoutingTable({ apiBase }: RoutingTableProps) {
               borderRadius: "0.375rem"
             }}
           >
-            <option value="">Select Router</option>
+            <option value="">Select a router</option>
             {routers.map((router) => (
               <option key={router.id} value={router.id}>
-                {router.ip_address} - {router.hostname || router.vendor || "Unknown"}
+                {router.hostname || router.ip_address}
               </option>
             ))}
           </select>
+          <button 
+            onClick={loadRoutingTable}
+            disabled={refreshing}
+            className="refresh-btn"
+          >
+            {refreshing ? "Refreshing..." : "↻ Refresh"}
+          </button>
         </div>
       </div>
 
-      {loading && <div style={{ textAlign: "center", padding: "2rem", color: "#6b7280" }}>Loading routing table...</div>}
+      {loading && <div className="inventory-loading">Loading routing table...</div>}
       
       {error && (
-        <div style={{ 
-          padding: "1rem", 
-          backgroundColor: "#fee", 
-          border: "1px solid #fcc", 
-          borderRadius: "0.375rem",
-          color: "#c00",
-          marginBottom: "1rem"
-        }}>
+        <div className="inventory-error">
           <strong>Error:</strong> {error}
         </div>
       )}
@@ -261,116 +243,29 @@ function RoutingTable({ apiBase }: RoutingTableProps) {
             </div>
           </div>
 
-          <div style={{ 
-            border: "1px solid #e5e7eb", 
-            borderRadius: "0.5rem", 
-            overflow: "hidden",
-            backgroundColor: "white",
-            maxHeight: "60vh", // Limit height to 60% of viewport
-            display: "flex",
-            flexDirection: "column"
-          }}>
-            <div style={{ overflowY: "auto" }}>
-              <table style={{ width: "100%", borderCollapse: "collapse" }}>
-                <thead style={{ 
-                  backgroundColor: "#f9fafb",
-                  position: "sticky",
-                  top: 0,
-                  zIndex: 10
-                }}>
-                  <tr>
-                    <th style={{ 
-                      padding: "0.75rem 1rem", 
-                      textAlign: "left", 
-                      fontSize: "0.75rem", 
-                      fontWeight: "600", 
-                      color: "#374151",
-                      textTransform: "uppercase",
-                      borderBottom: "2px solid #e5e7eb"
-                    }}>
-                      #
-                    </th>
-                    <th style={{ 
-                      padding: "0.75rem 1rem", 
-                      textAlign: "left", 
-                      fontSize: "0.75rem", 
-                      fontWeight: "600", 
-                      color: "#374151",
-                      textTransform: "uppercase",
-                      borderBottom: "2px solid #e5e7eb"
-                    }}>
-                      Destination
-                    </th>
-                    <th style={{ 
-                      padding: "0.75rem 1rem", 
-                      textAlign: "left", 
-                      fontSize: "0.75rem", 
-                      fontWeight: "600", 
-                      color: "#374151",
-                      textTransform: "uppercase",
-                      borderBottom: "2px solid #e5e7eb"
-                    }}>
-                      Netmask
-                    </th>
-                    <th style={{ 
-                      padding: "0.75rem 1rem", 
-                      textAlign: "left", 
-                      fontSize: "0.75rem", 
-                      fontWeight: "600", 
-                      color: "#374151",
-                      textTransform: "uppercase",
-                      borderBottom: "2px solid #e5e7eb"
-                    }}>
-                      Next Hop
-                    </th>
-                    <th style={{ 
-                      padding: "0.75rem 1rem", 
-                      textAlign: "left", 
-                      fontSize: "0.75rem", 
-                      fontWeight: "600", 
-                      color: "#374151",
-                      textTransform: "uppercase",
-                      borderBottom: "2px solid #e5e7eb"
-                    }}>
-                      Protocol
-                    </th>
+          <div className="inventory-grid-wrapper">
+            <table className="inventory-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Destination</th>
+                  <th>Netmask</th>
+                  <th>Next Hop</th>
+                  <th>Protocol</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.routes.map((route, idx) => (
+                  <tr key={idx}>
+                    <td>{idx + 1}</td>
+                    <td>{route.destination}</td>
+                    <td>{route.netmask}</td>
+                    <td>{route.next_hop || "—"}</td>
+                    <td>{route.protocol || "—"}</td>
                   </tr>
-                </thead>
-                <tbody>
-                  {data.routes.map((route, idx) => (
-                    <tr 
-                      key={idx}
-                      style={{ 
-                        borderBottom: idx < data.routes.length - 1 ? "1px solid #f3f4f6" : "none",
-                        backgroundColor: idx % 2 === 0 ? "white" : "#fafafa"
-                      }}
-                    >
-                      <td style={{ padding: "0.75rem 1rem", color: "#6b7280", fontSize: "0.875rem" }}>
-                        {idx + 1}
-                      </td>
-                      <td style={{ padding: "0.75rem 1rem", fontFamily: "monospace", fontSize: "0.875rem" }}>
-                        {route.destination}
-                      </td>
-                      <td style={{ padding: "0.75rem 1rem", fontFamily: "monospace", fontSize: "0.875rem" }}>
-                        {route.netmask}
-                      </td>
-                      <td style={{ 
-                        padding: "0.75rem 1rem", 
-                        fontFamily: "monospace", 
-                        fontSize: "0.875rem",
-                        fontWeight: route.next_hop ? "500" : "normal",
-                        color: route.next_hop ? "#1e40af" : "#9ca3af"
-                      }}>
-                        {route.next_hop || "—"}
-                      </td>
-                      <td style={{ padding: "0.75rem 1rem", fontSize: "0.875rem", color: "#6b7280" }}>
-                        {route.protocol || "—"}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </table>
           </div>
         </>
       )}

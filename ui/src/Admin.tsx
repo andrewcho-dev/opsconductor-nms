@@ -179,12 +179,14 @@ function Admin({ apiBase }: AdminProps) {
 
 
   return (
-    <div className="admin-container">
-      <div className="admin-header">
-        <h1>System Administration</h1>
+    <div className="inventory-container">
+      <div className="inventory-header">
+        <h2 style={{ margin: 0, color: "#0f172a", fontSize: "1.125rem" }}>
+          System Administration
+        </h2>
       </div>
 
-      <div className="admin-content">
+      <div className="inventory-grid-wrapper">
         <section className="admin-section">
           <h2>OUI Database Management</h2>
           

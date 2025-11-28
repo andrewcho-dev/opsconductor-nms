@@ -3,17 +3,18 @@ import InventoryGrid from "./InventoryGrid";
 import Admin from "./Admin";
 import RoutingTable from "./RoutingTable";
 import Navigation from "./Navigation";
+import TableExplorer from "./TableExplorer";
 
 // NOTE: For this docker-compose setup the API is served by network-discovery on port 8000.
 // We hardcode apiBase here to avoid any ambiguity with Vite env vars.
 const apiBase = "http://10.120.0.18:8000";
 
-type Page = "inventory" | "admin" | "routing";
+type Page = "inventory" | "admin" | "routing" | "tables";
 
 function App() {
   const [currentPage, setCurrentPage] = useState<Page>("inventory");
 
-  const contentClass = `content${currentPage === "inventory" ? " content--inventory" : ""}`;
+  const contentClass = `content${currentPage === "inventory" ? " content--inventory" : currentPage === "tables" ? " content--tables" : ""}`;
 
   return (
     <div className="app">
@@ -31,6 +32,9 @@ function App() {
         )}
         {currentPage === "routing" && (
           <RoutingTable apiBase={apiBase} />
+        )}
+        {currentPage === "tables" && (
+          <TableExplorer apiBase={apiBase} />
         )}
       </div>
     </div>

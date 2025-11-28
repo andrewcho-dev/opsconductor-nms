@@ -1,12 +1,15 @@
+type Page = "inventory" | "admin" | "routing" | "tables";
+
 interface NavigationProps {
-  currentPage: string;
-  onNavigate: (page: "inventory" | "admin" | "routing") => void;
+  currentPage: Page;
+  onNavigate: (page: Page) => void;
 }
 
 function Navigation({ currentPage, onNavigate }: NavigationProps) {
   const navItems = [
     { id: "inventory", label: "Inventory", icon: "📋" },
     { id: "routing", label: "Routes", icon: "🌐" },
+    { id: "tables", label: "Tables", icon: "📊" },
     { id: "admin", label: "Admin", icon: "⚙️" }
   ];
 
@@ -27,7 +30,7 @@ function Navigation({ currentPage, onNavigate }: NavigationProps) {
         {navItems.map((item) => (
           <button
             key={item.id}
-            onClick={() => onNavigate(item.id as "inventory" | "admin" | "routing")}
+            onClick={() => onNavigate(item.id as Page)}
             style={{
               padding: "0.375rem 0.75rem",
               fontSize: "0.875rem",

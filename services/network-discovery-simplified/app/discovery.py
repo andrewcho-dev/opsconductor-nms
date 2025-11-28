@@ -8,6 +8,7 @@ from datetime import datetime
 from .models import DiscoveryRun, Router, Route, Network, TopologyLink
 from .snmp_simple import SimpleSnmpClient
 from .types import SystemInfo, RouteEntry
+from .vendors import vendor_factory
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,7 @@ class NetworkDiscovery:
     def __init__(self, db_session: Session):
         self.db = db_session
         self.snmp_client = SimpleSnmpClient(timeout=5, retries=2)
+        self.vendor_factory = vendor_factory
     
     def start_discovery(self, root_ip: str, snmp_community: str = 'public', 
                        ssh_credentials: Optional[Dict[str, str]] = None) -> int:
@@ -96,7 +98,7 @@ class NetworkDiscovery:
                 if not routes and ssh_credentials:
                     logger.info(f"  SNMP found no routes, trying SSH as fallback")
                     discovery_method = 'cli'
-                    ssh_routes = self._get_routes_ssh_optimized(current_ip, ssh_credentials)
+                    ssh_routes = self._get_routes_ssh_optimized(current_ip, ssh_credentials, system_info)
                     if ssh_routes:
                         routes = ssh_routes
                         logger.info(f"  SSH fallback found {len(routes)} routes")
@@ -109,7 +111,10 @@ class NetworkDiscovery:
                     logger.info(f"  SNMP failed, trying SSH discovery")
                     discovery_method = 'cli'
                     try:
-                        ssh_routes = self._get_routes_ssh_optimized(current_ip, ssh_credentials)
+                        # Attempt to gather minimal system info over SSH to help vendor detection
+                        system_info_cli = self._get_system_info_ssh(current_ip, ssh_credentials)
+                        system_info = system_info or system_info_cli
+                        ssh_routes = self._get_routes_ssh_optimized(current_ip, ssh_credentials, system_info)
                         if ssh_routes:
                             routes = ssh_routes
                             logger.info(f"  SSH discovery found {len(routes)} routes")
@@ -146,32 +151,11 @@ class NetworkDiscovery:
         
         return discovered_routers
     
-    def _get_routes_ssh_optimized(self, ip: str, credentials: Dict[str, str]) -> List[Route]:
+    def _get_routes_ssh_optimized(self, ip: str, credentials: Dict[str, str], system_info: Optional[SystemInfo] = None) -> List[Route]:
         """Optimized SSH route discovery with faster timeouts and edge router focus."""
         routes = []
         
-        # Optimized command list for edge routers - SNMP-first approach means fewer SSH attempts
-        commands = [
-            "show ip route",           # Standard Cisco
-            "show route",              # Generic
-            "show ip route static",    # Static routes only
-            "show ip route connected", # Connected routes only  
-            "get route info",          # Some edge routers
-            "ip route show",           # Linux-style
-            # L3 Switch specific commands
-            "show ip route",           # Cisco L3 switches
-            "show routing-table",      # Some L3 switches
-            "show ip route summary",   # Route summary
-            "display ip routing-table", # Huawei/H3C style
-            # ASA-specific commands for NAT/VPN tunnels
-            "show crypto map",         # VPN tunnel information
-            "show nat",                # NAT translations
-            "show run | include tunnel", # Tunnel configurations
-            "show run | include nat",   # NAT configurations
-            "show vpn-sessiondb",      # Active VPN sessions
-            "show crypto ipsec sa",    # IPSec security associations
-            "show access-list",        # ACLs that might reveal networks
-        ]
+        commands = self._get_cli_command_list(system_info)
         
         for command in commands:
             try:
@@ -209,28 +193,15 @@ class NetworkDiscovery:
                 
                 logger.info(f"  SSH command output ({len(output)} chars): {output[:1000]}...")
                 
-                # For ASA-specific commands, use the crypto/NAT parser
-                if any(asa_cmd in command for asa_cmd in ['crypto', 'nat', 'tunnel', 'vpn', 'access-list']):
-                    crypto_routes = self._parse_asa_crypto_nat_info(output)
-                    if crypto_routes:
-                        logger.info(f"  Found {len(crypto_routes)} networks from ASA crypto/NAT command")
-                        routes.extend(crypto_routes)
-                else:
-                    # Use regular route parsers for standard routing commands
-                    for line in output.splitlines():
-                        route = self._parse_cisco_route_line(line)
-                        if route:
-                            logger.info(f"  Parsed route: {route.destination}/{route.netmask} via {route.next_hop}")
-                            routes.append(route)
-                        else:
-                            # Try other parsing methods
-                            config_route = self._parse_config_route_line(line)
-                            if config_route:
-                                routes.append(config_route)
-                            else:
-                                asa_route = self._parse_asa_route_line(line)
-                                if asa_route:
-                                    routes.append(asa_route)
+                parsed_routes: List[RouteEntry] = []
+                if system_info and self.vendor_factory:
+                    parsed_routes = self.vendor_factory.auto_parse_routes(output, command, system_info)
+
+                if not parsed_routes:
+                    parsed_routes = self._parse_routes_from_output(output, command)
+
+                if parsed_routes:
+                    routes.extend(parsed_routes)
                 
                 if routes:  # Found routes, don't try more commands
                     logger.info(f"  Found {len(routes)} routes with optimized SSH, stopping")
@@ -246,6 +217,69 @@ class NetworkDiscovery:
                     pass
                 continue
         
+        return routes
+
+    def _get_cli_command_list(self, system_info: Optional[SystemInfo]) -> List[str]:
+        """Return ordered list of CLI commands with vendor-specific preference."""
+        default_commands = self._default_cli_commands()
+        if system_info and self.vendor_factory:
+            vendor_commands = self.vendor_factory.auto_detect_commands(system_info)
+            if vendor_commands:
+                # Append defaults that weren't included to ensure broad coverage
+                fallback = [cmd for cmd in default_commands if cmd not in vendor_commands]
+                return vendor_commands + fallback
+        return default_commands
+
+    def _default_cli_commands(self) -> List[str]:
+        """Default set of CLI commands for generic devices."""
+        return [
+            "show ip route",           # Standard Cisco
+            "show route",              # Generic
+            "show ip route static",    # Static routes only
+            "show ip route connected", # Connected routes only  
+            "get route info",          # Some edge routers
+            "ip route show",           # Linux-style
+            # L3 Switch specific commands
+            "show routing-table",      # Some L3 switches
+            "show ip route summary",   # Route summary
+            "display ip routing-table", # Huawei/H3C style
+            # ASA-specific commands for NAT/VPN tunnels
+            "show crypto map",         # VPN tunnel information
+            "show nat",                # NAT translations
+            "show run | include tunnel", # Tunnel configurations
+            "show run | include nat",   # NAT configurations
+            "show vpn-sessiondb",      # Active VPN sessions
+            "show crypto ipsec sa",    # IPSec security associations
+            "show access-list",        # ACLs that might reveal networks
+        ]
+
+    def _parse_routes_from_output(self, output: str, command: str) -> List[RouteEntry]:
+        """Fallback parser that reuses legacy Cisco/ASA parsing logic."""
+        routes: List[RouteEntry] = []
+
+        if any(keyword in command for keyword in ['crypto', 'nat', 'tunnel', 'vpn', 'access-list']):
+            crypto_routes = self._parse_asa_crypto_nat_info(output)
+            if crypto_routes:
+                routes.extend(crypto_routes)
+
+        if routes:
+            return routes
+
+        for line in output.splitlines():
+            route = self._parse_cisco_route_line(line)
+            if route:
+                routes.append(route)
+                continue
+
+            config_route = self._parse_config_route_line(line)
+            if config_route:
+                routes.append(config_route)
+                continue
+
+            asa_route = self._parse_asa_route_line(line)
+            if asa_route:
+                routes.append(asa_route)
+
         return routes
     
     def _save_router(self, ip: str, system_info, routes: List[Route], interfaces, discovery_method: str, run_id: int):
