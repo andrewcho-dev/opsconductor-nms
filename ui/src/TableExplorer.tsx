@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import DataTable, { TableColumnMeta } from "./components/DataTable";
-import { useErrorHandler, ErrorDisplay, LoadingSpinner, apiCall } from "./utils/errorHandling";
+import { useErrorHandler, ErrorDisplay, LoadingSpinner } from "./utils/errorHandling";
 
 interface TableExplorerProps {
   apiBase: string;

@@ -101,45 +101,45 @@ export const useErrorHandler = () => {
   };
 };
 
-// Utility function to make API calls with error handling
-export const apiCall = async <T>(
-  url: string,
-  options?: RequestInit
-): Promise<T> => {
-  const response = await fetch(url, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers
-    },
-    ...options
-  });
-
-  if (!response.ok) {
-    let errorData;
-    try {
-      errorData = await response.json();
-    } catch {
-      // If response is not JSON, create a generic error
-      errorData = {
-        success: false,
-        error: {
-          error_id: `HTTP_${Date.now()}`,
-          error_code: 'HTTP_ERROR',
-          message: `HTTP ${response.status}: ${response.statusText}`,
-          user_message: `Request failed: ${response.statusText}`,
-          troubleshooting: 'Check your network connection and try again.',
-          timestamp: new Date().toISOString(),
-          path: url
-        }
-      };
-    }
-
-    throw errorData;
-  }
-
-  return response.json();
-};
-
+//// Utility function to make API calls with error handling
+//export const apiCall = async <T>(
+//  url: string,
+//  options?: RequestInit
+//): Promise<T> => {
+//  const response = await fetch(url, {
+//    headers: {
+//      'Content-Type': 'application/json',
+//      ...options?.headers
+//    },
+//    ...options
+//  });
+//
+//  if (!response.ok) {
+//    let errorData;
+//    try {
+//      errorData = await response.json();
+//    } catch {
+//      // If response is not JSON, create a generic error
+//      errorData = {
+//        success: false,
+//        error: {
+//          error_id: `HTTP_${Date.now()}`,
+//          error_code: 'HTTP_ERROR',
+//          message: `HTTP ${response.status}: ${response.statusText}`,
+//          user_message: `Request failed: ${response.statusText}`,
+//          troubleshooting: 'Check your network connection and try again.',
+//          timestamp: new Date().toISOString(),
+//          path: url
+//        }
+//      };
+//    }
+//
+//    throw errorData;
+//  }
+//
+//  return response.json();
+//};
+//
 // Error display component
 interface ErrorDisplayProps {
   error: NMSError;

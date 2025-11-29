@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import InventoryGrid from "./InventoryGrid";
 import Admin from "./Admin";
 import RoutingTable from "./RoutingTable";
@@ -14,8 +14,42 @@ type Page = "inventory" | "admin" | "routing" | "tables";
 
 function App() {
   const [currentPage, setCurrentPage] = useState<Page>("inventory");
+  const [selectedRouterId, setSelectedRouterId] = useState<number | null>(null);
 
   const contentClass = `content${currentPage === "inventory" ? " content--inventory" : currentPage === "tables" ? " content--tables" : ""}`;
+
+  const handleNavigateToRouter = (routerId: number) => {
+    setSelectedRouterId(routerId);
+    setCurrentPage("routing");
+  };
+
+  // Handle browser back/forward buttons
+  useEffect(() => {
+    const handlePopState = (event: PopStateEvent) => {
+      if (event.state) {
+        setCurrentPage(event.state.page);
+        setSelectedRouterId(event.state.selectedRouterId || null);
+      } else {
+        // If no state, default to inventory
+        setCurrentPage("inventory");
+        setSelectedRouterId(null);
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    
+    // Set initial state
+    window.history.replaceState({ page: currentPage, selectedRouterId }, '', `/${currentPage}`);
+
+    return () => {
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, []);
+
+  // Update history when page changes
+  useEffect(() => {
+    window.history.pushState({ page: currentPage, selectedRouterId }, '', `/${currentPage}`);
+  }, [currentPage, selectedRouterId]);
 
   return (
     <ErrorBoundary
@@ -63,13 +97,14 @@ function App() {
               apiBase={apiBase}
               onNavigateToAdmin={() => setCurrentPage("admin")}
               onNavigateToRouting={() => setCurrentPage("routing")}
+              onNavigateToRouter={handleNavigateToRouter}
             />
           )}
           {currentPage === "admin" && (
             <Admin apiBase={apiBase} />
           )}
           {currentPage === "routing" && (
-            <RoutingTable apiBase={apiBase} />
+            <RoutingTable apiBase={apiBase} selectedRouterId={selectedRouterId} />
           )}
           {currentPage === "tables" && (
             <TableExplorer apiBase={apiBase} />

@@ -26,12 +26,13 @@ interface Router {
 
 interface RoutingTableProps {
   apiBase: string;
+  selectedRouterId?: number | null;
 }
 
-function RoutingTable({ apiBase }: RoutingTableProps) {
+function RoutingTable({ apiBase, selectedRouterId: propSelectedRouterId }: RoutingTableProps) {
   const [data, setData] = useState<RoutingData | null>(null);
   const [routers, setRouters] = useState<Router[]>([]);
-  const [selectedRouterId, setSelectedRouterId] = useState<number | null>(null);
+  const [selectedRouterId, setSelectedRouterId] = useState<number | null>(propSelectedRouterId || null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -106,6 +107,13 @@ function RoutingTable({ apiBase }: RoutingTableProps) {
   useEffect(() => {
     loadRouters();
   }, [apiBase]);
+
+  useEffect(() => {
+    // Update selected router ID when prop changes
+    if (propSelectedRouterId !== undefined && propSelectedRouterId !== selectedRouterId) {
+      setSelectedRouterId(propSelectedRouterId);
+    }
+  }, [propSelectedRouterId, selectedRouterId]);
 
   useEffect(() => {
     if (selectedRouterId) {

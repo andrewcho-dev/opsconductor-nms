@@ -43,6 +43,7 @@ interface InventoryGridProps {
   apiBase: string;
   onNavigateToAdmin: () => void;
   onNavigateToRouting: () => void;
+  onNavigateToRouter?: (routerId: number) => void;
 }
 
 interface SnmpConfig {
@@ -142,7 +143,7 @@ function renderComplexValue(value: any, depth: number = 0): React.ReactNode {
 
 const STATE_SERVER_API_BASE = "http://10.120.0.18:8000";
 
-function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToRouting }: InventoryGridProps) {
+function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToRouting, onNavigateToRouter }: InventoryGridProps) {
   const [devices, setDevices] = useState<InventoryDevice[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -201,6 +202,13 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToRouting }: Inve
           navigator.clipboard.writeText(`${protocol} ${ipAddress}`);
         }
       }
+    }
+  };
+
+  const handleRouterClick = (device: InventoryDevice) => {
+    // Only navigate to routing page for router devices
+    if (device.device_type === 'router' && onNavigateToRouter) {
+      onNavigateToRouter(device.id);
     }
   };
 
@@ -518,7 +526,14 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToRouting }: Inve
           </thead>
           <tbody>
             {filteredDevices.map((device) => (
-              <tr key={device.id}>
+              <tr 
+                key={device.id}
+                onClick={() => handleRouterClick(device)}
+                style={{
+                  cursor: device.device_type === 'router' && onNavigateToRouter ? 'pointer' : 'default'
+                }}
+                title={device.device_type === 'router' && onNavigateToRouter ? 'Click to view routes' : undefined}
+              >
                 <td className="ip-cell">{device.ip_address}</td>
                 <td className="type-cell">
                   <span className={`type-badge ${device.device_type || "unknown"}`}>
@@ -551,6 +566,7 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToRouting }: Inve
                             value={roleValue}
                             checked={isChecked}
                             onChange={(e) => {
+                              e.stopPropagation(); // Prevent row click
                               const updatedDevice = { ...device, network_role: e.target.value, network_role_confirmed: true };
                               setDevices(devices.map(d => d.id === device.id ? updatedDevice : d));
                               fetch(`${apiBase}/api/inventory/${device.ip_address}`, {
@@ -578,7 +594,10 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToRouting }: Inve
                   {device.snmp_data ? (
                     <button
                       className="snmp-badge snmp-enabled"
-                      onClick={() => openSnmpModal(device)}
+                      onClick={(e) => {
+                        e.stopPropagation(); // Prevent row click
+                        openSnmpModal(device);
+                      }}
                       title="SNMP Discovered - Click for details"
                     >
                       SNMP
@@ -586,7 +605,10 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToRouting }: Inve
                   ) : (
                     <button
                       className="snmp-badge snmp-disabled"
-                      onClick={() => openSnmpModal(device)}
+                      onClick={(e) => {
+                        e.stopPropagation(); // Prevent row click
+                        openSnmpModal(device);
+                      }}
                       title="Configure SNMP"
                     >
                       SNMP
@@ -604,7 +626,10 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToRouting }: Inve
                           <span 
                             key={port} 
                             className={`port-badge ${isClickable ? 'clickable' : ''}`}
-                            onClick={isClickable ? () => handlePortClick(device.ip_address, port) : undefined}
+                            onClick={isClickable ? (e) => {
+                            e.stopPropagation(); // Prevent row click
+                            handlePortClick(device.ip_address, port);
+                          } : undefined}
                             style={isClickable ? { cursor: 'pointer' } : undefined}
                             title={
                               portNum === 80 ? 'Click to open HTTP' :

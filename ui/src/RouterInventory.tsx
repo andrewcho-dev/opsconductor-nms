@@ -35,10 +35,11 @@ interface RouterDetail {
 
 interface RouterInventoryProps {
   apiBase: string;
-  onBack: () => void;
+  onBack?: () => void;
+  onNavigateToRouter?: (routerId: number) => void;
 }
 
-function RouterInventory({ apiBase, onBack }: RouterInventoryProps) {
+function RouterInventory({ apiBase, onBack, onNavigateToRouter }: RouterInventoryProps) {
   const [routers, setRouters] = useState<Router[]>([]);
   const [selectedRouter, setSelectedRouter] = useState<Router | null>(null);
   const [routerDetail, setRouterDetail] = useState<RouterDetail | null>(null);
@@ -69,7 +70,6 @@ function RouterInventory({ apiBase, onBack }: RouterInventoryProps) {
   const loadRouterDetail = async (router: Router) => {
     try {
       setDetailLoading(true);
-      setDetailError(null);
       
       // Get routes for this router
       const routesResponse = await fetch(`${apiBase}/api/v1/routers/${router.id}/routes`);
@@ -102,12 +102,16 @@ function RouterInventory({ apiBase, onBack }: RouterInventoryProps) {
   }, [apiBase]);
 
   const handleRouterClick = (router: Router) => {
-    if (selectedRouter?.id === router.id) {
-      setSelectedRouter(null);
-      setRouterDetail(null);
+    if (onNavigateToRouter) {
+      onNavigateToRouter(router.id);
     } else {
-      setSelectedRouter(router);
-      loadRouterDetail(router);
+      if (selectedRouter?.id === router.id) {
+        setSelectedRouter(null);
+        setRouterDetail(null);
+      } else {
+        setSelectedRouter(router);
+        loadRouterDetail(router);
+      }
     }
   };
 
@@ -141,22 +145,24 @@ function RouterInventory({ apiBase, onBack }: RouterInventoryProps) {
     <div style={{ padding: "2rem", fontFamily: "system-ui, sans-serif" }}>
       <div style={{ marginBottom: "1.5rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
-          <button
-            onClick={onBack}
-            style={{
-              padding: "0.5rem 1rem",
-              marginRight: "1rem",
-              backgroundColor: "#6b7280",
-              color: "white",
-              border: "none",
-              borderRadius: "0.375rem",
-              cursor: "pointer",
-              fontSize: "0.875rem",
-              fontWeight: "500",
-            }}
-          >
-            ← Back
-          </button>
+          {onBack && (
+            <button
+              onClick={onBack}
+              style={{
+                padding: "0.5rem 1rem",
+                marginRight: "1rem",
+                backgroundColor: "#6b7280",
+                color: "white",
+                border: "none",
+                borderRadius: "0.375rem",
+                cursor: "pointer",
+                fontSize: "0.875rem",
+                fontWeight: "500",
+              }}
+            >
+              ← Back
+            </button>
+          )}
           <button
             onClick={loadRouters}
             disabled={refreshing}
@@ -214,10 +220,16 @@ function RouterInventory({ apiBase, onBack }: RouterInventoryProps) {
               Discovered Routers
             </div>
             <div style={{ overflowY: "auto", maxHeight: "calc(100vh - 280px)" }}>
-              {routers.map((router) => (
+              {routers.map((router) => {
+                console.log('Rendering router:', router.id, router.ip_address);
+                const clickHandler = () => {
+                  console.log('Click handler called for router:', router.id);
+                  handleRouterClick(router);
+                };
+                return (
                 <div
                   key={router.id}
-                  onClick={() => handleRouterClick(router)}
+                  onClick={clickHandler}
                   style={{
                     padding: "1rem",
                     borderBottom: "1px solid #f3f4f6",
@@ -283,7 +295,8 @@ function RouterInventory({ apiBase, onBack }: RouterInventoryProps) {
                     Discovered: {formatDate(router.created_at)}
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
