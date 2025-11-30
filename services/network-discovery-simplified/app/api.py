@@ -339,8 +339,7 @@ def start_discovery(request: DiscoveryRequest, db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Unexpected error starting discovery: {str(e)}", exc_info=True)
         raise DiscoveryError(
-            message=f"Failed to start discovery: {str(e)}",
-            user_message="Unable to start network discovery. Please try again."
+            message=f"Failed to start discovery: {str(e)}"
         )
 
 

@@ -207,6 +207,22 @@ class NMSLogger:
         else:
             self.logger.info(f"Request: {request.method} {request.url}", extra=extra)
 
+    def error(self, message: str, exc_info=None):
+        """Log an error message."""
+        self.logger.error(message, exc_info=exc_info)
+
+    def info(self, message: str):
+        """Log an info message."""
+        self.logger.info(message)
+
+    def warning(self, message: str):
+        """Log a warning message."""
+        self.logger.warning(message)
+
+    def debug(self, message: str):
+        """Log a debug message."""
+        self.logger.debug(message)
+
     def _get_client_ip(self, request: Request) -> str:
         """Extract client IP from request."""
         x_forwarded_for = request.headers.get('x-forwarded-for')

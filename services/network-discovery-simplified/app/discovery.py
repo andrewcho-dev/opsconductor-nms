@@ -1,5 +1,7 @@
 import logging
 import paramiko
+import subprocess
+import re
 from typing import List, Dict, Optional, Set, Tuple
 from ipaddress import IPv4Address, IPv4Network, ip_network
 from sqlalchemy.orm import Session
@@ -911,7 +913,258 @@ class NetworkDiscovery:
             return None
     
     def _build_topology_links(self, run_id: int):
-        """Build topology links based on shared networks."""
+        """Build topology links based on traceroute data and shared networks."""
+        routers = self.db.query(Router).filter(Router.discovery_run_id == run_id, Router.is_router == True).all()
+        
+        # First, build topology from traceroute data
+        self._build_traceroute_topology(run_id, routers)
+        
+        # Then, supplement with direct network connections
+        self._build_direct_network_links(run_id)
+    
+    def _is_private_ip(self, ip: str) -> bool:
+        """Check if IP address is in private ranges."""
+        try:
+            parts = ip.split('.')
+            if len(parts) != 4:
+                return False
+            
+            first = int(parts[0])
+            second = int(parts[1])
+            
+            # 10.0.0.0/8
+            if first == 10:
+                return True
+            # 172.16.0.0/12
+            if first == 172 and 16 <= second <= 31:
+                return True
+            # 192.168.0.0/16
+            if first == 192 and second == 168:
+                return True
+            # 169.254.0.0/16 (link-local)
+            if first == 169 and second == 254:
+                return True
+                
+            return False
+        except (ValueError, IndexError):
+            return False
+
+    def _get_network_segment(self, ip: str) -> str:
+        """Get the network segment for an IP address."""
+        try:
+            parts = ip.split('.')
+            if len(parts) != 4:
+                return ip
+                
+            # For 10.x.x.x, show 10.x.x.0/24
+            if int(parts[0]) == 10:
+                return f"10.{parts[1]}.{parts[2]}.0/24"
+            # For 192.168.x.x, show 192.168.x.0/24
+            elif int(parts[0]) == 192 and int(parts[1]) == 168:
+                return f"192.168.{parts[2]}.0/24"
+            # For 172.16-31.x.x, show 172.16-31.x.0/24
+            elif int(parts[0]) == 172 and 16 <= int(parts[1]) <= 31:
+                return f"172.{parts[1]}.{parts[2]}.0/24"
+            else:
+                return f"{parts[0]}.{parts[1]}.0.0/16"
+        except (ValueError, IndexError):
+            return ip
+
+    def _perform_traceroute(self, destination: str, max_hops: int = 30) -> List[str]:
+        """Perform traceroute and return list of hop IPs, filtering to private IPs only."""
+        try:
+            # Use traceroute command (Linux)
+            result = subprocess.run(
+                ['traceroute', '-n', '-m', str(max_hops), destination],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            hops = []
+            lines = result.stdout.split('\n')
+            
+            for line in lines[1:]:  # Skip first line (header)
+                # Extract IP from each hop line
+                # Format: "1 10.120.0.2 1.234 ms 1.456 ms 1.789 ms"
+                match = re.search(r'\d+\s+(\d+\.\d+\.\d+\.\d+)', line)
+                if match:
+                    hop_ip = match.group(1)
+                    # Only include private IP addresses
+                    if self._is_private_ip(hop_ip) and hop_ip not in hops:
+                        hops.append(hop_ip)
+            
+            return hops
+            
+        except subprocess.TimeoutExpired:
+            logger.warning(f"Traceroute to {destination} timed out")
+            return []
+        except Exception as e:
+            logger.error(f"Traceroute to {destination} failed: {e}")
+            return []
+    
+    def _build_traceroute_topology(self, run_id: int, routers: List[Router]):
+        """Build topology links from comprehensive traceroute data."""
+        logger.info("Building comprehensive topology from traceroute data...")
+        
+        # Get the discovery run to use as source
+        discovery_run = self.db.query(DiscoveryRun).filter(DiscoveryRun.id == run_id).first()
+        source_ip = discovery_run.root_ip if discovery_run else "10.120.0.2"
+        
+        # Target ALL routers for comprehensive discovery
+        all_targets = set()
+        all_targets.update(r.ip_address for r in routers)
+        
+        # Add comprehensive network exploration targets
+        exploration_targets = [
+            # All 10.121.x.x network gateways
+            "10.121.1.1", "10.121.2.1", "10.121.3.1", "10.121.4.1", "10.121.5.1",
+            "10.121.6.1", "10.121.7.1", "10.121.8.1", "10.121.9.1", "10.121.10.1",
+            "10.121.11.1", "10.121.12.1", "10.121.13.1", "10.121.14.1", "10.121.15.1",
+            "10.121.16.1", "10.121.17.1", "10.121.18.1", "10.121.19.1", "10.121.20.1",
+            "10.121.21.1", "10.121.22.1", "10.121.23.1", "10.121.24.1", "10.121.25.1",
+            "10.121.26.1", "10.121.27.1", "10.121.28.1", "10.121.29.1", "10.121.30.1",
+            "10.121.31.1", "10.121.32.1", "10.121.33.1", "10.121.34.1", "10.121.35.1",
+            "10.121.80.1", "10.121.116.1", "10.121.226.1",
+            # Additional 10.120.x.x network points
+            "10.120.1.1", "10.120.2.1", "10.120.3.1", "10.120.4.1", "10.120.5.1",
+            "10.120.10.1", "10.120.20.1", "10.120.30.1", "10.120.50.1", "10.120.100.1",
+            "10.120.110.1", "10.120.115.1", "10.120.116.1", "10.120.117.1", "10.120.118.1",
+        ]
+        
+        all_targets.update(exploration_targets)
+        
+        logger.info(f"Tracerouting to {len(all_targets)} targets from {source_ip}")
+        
+        links_created = 0
+        for target_ip in all_targets:
+            if target_ip == source_ip:
+                continue  # Skip traceroute to self
+            
+            logger.info(f"Tracerouting from {source_ip} to {target_ip}...")
+            hops = self._perform_traceroute(target_ip)
+            
+            if len(hops) < 2:
+                logger.debug(f"  Insufficient hops for {target_ip}")
+                continue  # Need at least source and destination
+            
+            logger.debug(f"  Traceroute hops: {hops}")
+            
+            # Create links between consecutive hops
+            for i in range(len(hops) - 1):
+                from_ip = hops[i]
+                to_ip = hops[i + 1]
+                
+                # Find or create router records for these IPs
+                from_router = self._find_or_create_router(run_id, from_ip)
+                to_router = self._find_or_create_router(run_id, to_ip)
+                
+                if from_router and to_router and from_router.id != to_router.id:
+                    # Check if link already exists
+                    existing = self.db.query(TopologyLink).filter(
+                        TopologyLink.discovery_run_id == run_id,
+                        TopologyLink.from_router_id == min(from_router.id, to_router.id),
+                        TopologyLink.to_router_id == max(from_router.id, to_router.id)
+                    ).first()
+                    
+                    if not existing:
+                        # Determine the shared network using proper network segments
+                        shared_network = self._find_shared_network(run_id, from_router.id, to_router.id)
+                        if not shared_network:
+                            # Show actual network segments for maximum clarity
+                            from_parts = from_ip.split('.')
+                            to_parts = to_ip.split('.')
+                            
+                            if len(from_parts) == 4 and len(to_parts) == 4:
+                                # Create clear network segment names
+                                from_seg = f"{from_parts[0]}.{from_parts[1]}.{from_parts[2]}.x"
+                                to_seg = f"{to_parts[0]}.{to_parts[1]}.{to_parts[2]}.x"
+                                
+                                if from_seg == to_seg:
+                                    # Same network - show the segment
+                                    shared_network = from_seg.replace('.x', '/24')
+                                else:
+                                    # Different networks - show both segments
+                                    # Try to fit within 18 chars: "120.0.x↔121.31.x"
+                                    from_short = f"{from_parts[1]}.{from_parts[2]}.x"
+                                    to_short = f"{to_parts[1]}.{to_parts[2]}.x"
+                                    shared_network = f"{from_short}↔{to_short}"
+                            else:
+                                shared_network = f"{from_ip}-{to_ip}"
+                        
+                        link = TopologyLink(
+                            discovery_run_id=run_id,
+                            from_router_id=min(from_router.id, to_router.id),
+                            to_router_id=max(from_router.id, to_router.id),
+                            shared_network=shared_network,
+                            link_type='traceroute'
+                        )
+                        self.db.add(link)
+                        links_created += 1
+                        logger.info(f"Added traceroute link: {from_ip} -> {to_ip} ({shared_network})")
+        
+        self.db.commit()
+        logger.info(f"Comprehensive traceroute discovery completed: {links_created} links created")
+    
+    def _find_or_create_router(self, run_id: int, ip: str) -> Optional[Router]:
+        """Find existing router or create a basic one for traceroute hops."""
+        # First try to find router in current discovery run
+        router = self._find_router_by_ip(run_id, ip)
+        if router:
+            return router
+        
+        # If not found in current run, find any existing router with this IP
+        existing_router = self.db.query(Router).filter(Router.ip_address == ip).first()
+        if existing_router:
+            logger.info(f"Using existing router for {ip} from discovery run {existing_router.discovery_run_id}")
+            return existing_router
+        
+        # Create completely new router if none exists
+        router = Router(
+            discovery_run_id=run_id,
+            ip_address=ip,
+            hostname=None,
+            vendor=None,
+            model=None,
+            discovered_via='traceroute',
+            is_router=True,
+            classification_reason='Discovered via traceroute hop'
+        )
+        self.db.add(router)
+        try:
+            self.db.commit()
+            logger.info(f"Created new traceroute-discovered router: {ip}")
+        except Exception as e:
+            self.db.rollback()
+            logger.error(f"Failed to create router {ip}: {e}")
+            return None
+        
+        return router
+    
+    def _find_router_by_ip(self, run_id: int, ip: str) -> Optional[Router]:
+        """Find router by IP address within a discovery run."""
+        return self.db.query(Router).filter(
+            Router.discovery_run_id == run_id,
+            Router.ip_address == ip
+        ).first()
+    
+    def _find_shared_network(self, run_id: int, router1_id: int, router2_id: int) -> Optional[str]:
+        """Find shared network between two routers."""
+        networks1 = {n.network for n in self.db.query(Network).filter(
+            Network.discovery_run_id == run_id,
+            Network.router_id == router1_id
+        ).all()}
+        
+        networks2 = {n.network for n in self.db.query(Network).filter(
+            Network.discovery_run_id == run_id,
+            Network.router_id == router2_id
+        ).all()}
+        
+        shared = networks1.intersection(networks2)
+        return shared.pop() if shared else None
+    
+    def _build_direct_network_links(self, run_id: int):
+        """Build direct links based on shared networks (original logic)."""
         routers = self.db.query(Router).filter(Router.discovery_run_id == run_id, Router.is_router == True).all()
         
         for router in routers:

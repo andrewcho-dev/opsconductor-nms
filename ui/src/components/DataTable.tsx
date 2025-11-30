@@ -1,11 +1,10 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import {
   ColumnDef,
   ColumnFiltersState,
   flexRender,
   getCoreRowModel,
   getFilteredRowModel,
-  getPaginationRowModel,
   getSortedRowModel,
   SortingState,
   useReactTable,
@@ -71,10 +70,17 @@ function getBadgeClass(value: any): string {
 }
 
 const DataTable = ({ columns, rows, density = "comfortable" }: DataTableProps) => {
-  const [sorting, setSorting] = useState<SortingState>([]);
+  const [sorting, setSorting] = useState<SortingState>([{ id: columns[0]?.id || '', desc: false }]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
+
+  // Update default sorting when columns change
+  useEffect(() => {
+    if (columns.length > 0 && (sorting.length === 0 || !columns.find(col => col.id === sorting[0]?.id))) {
+      setSorting([{ id: columns[0].id, desc: false }]);
+    }
+  }, [columns, sorting]);
 
   const columnDefs: ColumnDef<Record<string, any>>[] = useMemo(() => {
     return columns.map((col) => ({
@@ -115,7 +121,6 @@ const DataTable = ({ columns, rows, density = "comfortable" }: DataTableProps) =
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
     autoResetPageIndex: false,
     enableColumnResizing: true,
     columnResizeMode: "onChange",
@@ -206,30 +211,6 @@ const DataTable = ({ columns, rows, density = "comfortable" }: DataTableProps) =
             ))}
           </tbody>
         </table>
-      </div>
-
-      <div className="data-table__footer">
-        <div className="pagination">
-          <button onClick={() => table.previousPage()} disabled={!table.getCanPreviousPage()}>
-            Prev
-          </button>
-          <span>
-            Page {table.getState().pagination.pageIndex + 1} of {table.getPageCount() || 1}
-          </span>
-          <button onClick={() => table.nextPage()} disabled={!table.getCanNextPage()}>
-            Next
-          </button>
-        </div>
-        <select
-          value={table.getState().pagination.pageSize}
-          onChange={(e) => table.setPageSize(Number(e.target.value))}
-        >
-          {[10, 25, 50, 100].map((pageSize) => (
-            <option key={pageSize} value={pageSize}>
-              Show {pageSize}
-            </option>
-          ))}
-        </select>
       </div>
     </div>
   );
