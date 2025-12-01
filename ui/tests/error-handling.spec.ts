@@ -54,7 +54,7 @@ test('error handling works correctly', async ({ page }) => {
 
   // Check error message content
   const errorText = await errorElement?.textContent();
-  expect(errorText).toContain('RESOURCE_NOT_FOUND');
+  expect(errorText).toContain('RESOURCE NOT FOUND');
   expect(errorText).toContain('The requested table does not exist');
 
   // Check that error ID is displayed

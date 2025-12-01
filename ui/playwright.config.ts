@@ -1,6 +1,6 @@
 import { defineConfig, devices } from '@playwright/test';
 
-const baseURL = process.env.PLAYWRIGHT_UI_BASE_URL || 'http://127.0.0.1:5173';
+const baseURL = process.env.PLAYWRIGHT_UI_BASE_URL || 'http://localhost:3000';
 
 export default defineConfig({
   testDir: './tests',

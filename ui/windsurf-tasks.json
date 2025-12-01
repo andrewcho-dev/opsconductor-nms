@@ -1,0 +1,39 @@
+{
+  "name": "Playwright Test Tasks for Windsurf",
+  "description": "Tasks for running Playwright tests in different modes",
+  "tasks": [
+    {
+      "name": "test:e2e:ui",
+      "description": "Run Playwright tests with interactive UI viewer",
+      "command": "npm run test:e2e:ui",
+      "cwd": "/home/opsconductor/opsconductor-nms/ui",
+      "type": "test",
+      "icon": "🎭"
+    },
+    {
+      "name": "test:e2e:headed", 
+      "description": "Run Playwright tests with visible browser window",
+      "command": "npm run test:e2e:headed",
+      "cwd": "/home/opsconductor/opsconductor-nms/ui",
+      "type": "test",
+      "icon": "🖥️"
+    },
+    {
+      "name": "test:e2e",
+      "description": "Run all Playwright tests in headless mode",
+      "command": "npm run test:e2e", 
+      "cwd": "/home/opsconductor/opsconductor-nms/ui",
+      "type": "test",
+      "icon": "⚡"
+    },
+    {
+      "name": "dev-server",
+      "description": "Start development server (required for tests)",
+      "command": "npm run dev",
+      "cwd": "/home/opsconductor/opsconductor-nms/ui", 
+      "type": "build",
+      "icon": "🚀",
+      "background": true
+    }
+  ]
+}
