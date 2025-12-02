@@ -18,6 +18,19 @@ from .error_handling import (
 router = APIRouter()
 
 
+def _get_router_ip(db: Session, router_id: int) -> str:
+    """Get router IP address from router ID."""
+    router = db.query(Router).filter(Router.id == router_id).first()
+    return router.ip_address if router else "Unknown"
+
+
+def _get_next_hop_router_ip(db: Session, next_hop: str) -> str:
+    """Get next hop router IP address."""
+    if next_hop and next_hop != "0.0.0.0":
+        return next_hop
+    return "Direct"
+
+
 # Global variable to track current discovery (simplified approach)
 current_discovery = None
 
@@ -31,8 +44,8 @@ def get_inventory(db: Session = Depends(get_db)):
     inventory = []
     for device in devices:
         # Get routes for this device to determine if it's a router
-        routes = db.query(Route).filter(Route.router_id == device.id).all()
-        networks = db.query(Network).filter(Network.router_id == device.id).all()
+        routes = db.query(Route).filter(Route.source_router_ip == device.ip_address).all()
+        networks = db.query(Network).filter(Network.router_ip == device.ip_address).all()
         
         # Determine device type and role
         device_type = "router" if device.is_router else "unknown"
@@ -580,7 +593,7 @@ TABLE_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             {"id": "finished_at", "label": "Finished", "type": "datetime"},
         ],
         "query": lambda db: db.query(DiscoveryRun),
-        "serializer": lambda run: {
+        "serializer": lambda run, db: {
             "id": run.id,
             "root_ip": run.root_ip,
             "status": run.status,
@@ -597,7 +610,6 @@ TABLE_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "routers": {
         "columns": [
             {"id": "id", "label": "Router ID", "type": "number"},
-            {"id": "discovery_run_id", "label": "Run", "type": "number"},
             {"id": "ip_address", "label": "IP Address", "type": "mono"},
             {"id": "hostname", "label": "Hostname", "type": "text"},
             {"id": "vendor", "label": "Vendor", "type": "badge"},
@@ -607,9 +619,8 @@ TABLE_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             {"id": "created_at", "label": "Discovered", "type": "datetime"},
         ],
         "query": lambda db: db.query(Router),
-        "serializer": lambda router: {
+        "serializer": lambda router, db: {
             "id": router.id,
-            "discovery_run_id": router.discovery_run_id,
             "ip_address": router.ip_address,
             "hostname": router.hostname,
             "vendor": router.vendor,
@@ -620,60 +631,49 @@ TABLE_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         },
         "search_fields": [Router.ip_address, Router.hostname, Router.vendor, Router.model],
         "order_by": Router.created_at.desc(),
-        "supports_run_filter": True,
-        "run_column": Router.discovery_run_id,
+        "supports_run_filter": False,
     },
     "routes": {
         "columns": [
-            {"id": "id", "label": "Route ID", "type": "number"},
-            {"id": "discovery_run_id", "label": "Run", "type": "number"},
-            {"id": "router_id", "label": "Router", "type": "number"},
-            {"id": "destination", "label": "Destination", "type": "mono"},
-            {"id": "next_hop", "label": "Next Hop", "type": "mono"},
+            {"id": "destination", "label": "Destination Network", "type": "mono"},
+            {"id": "source_router_ip", "label": "Source Router IP", "type": "mono"},
+            {"id": "next_hop_router_ip", "label": "Next Hop Router IP", "type": "mono"},
             {"id": "protocol", "label": "Protocol", "type": "badge"},
             {"id": "discovered_via", "label": "Method", "type": "badge"},
             {"id": "created_at", "label": "Recorded", "type": "datetime"},
         ],
         "query": lambda db: db.query(Route),
-        "serializer": lambda route: {
-            "id": route.id,
-            "discovery_run_id": route.discovery_run_id,
-            "router_id": route.router_id,
+        "serializer": lambda route, db: {
             "destination": route.destination,
-            "next_hop": route.next_hop,
+            "source_router_ip": route.source_router_ip,
+            "next_hop_router_ip": _get_next_hop_router_ip(db, route.next_hop),
             "protocol": route.protocol,
             "discovered_via": route.discovered_via,
             "created_at": _serialize_datetime(route.created_at),
         },
         "search_fields": [Route.destination, Route.next_hop, Route.protocol],
         "order_by": Route.created_at.desc(),
-        "supports_run_filter": True,
-        "run_column": Route.discovery_run_id,
+        "supports_run_filter": False,
     },
     "networks": {
         "columns": [
-            {"id": "id", "label": "Network ID", "type": "number"},
-            {"id": "discovery_run_id", "label": "Run", "type": "number"},
-            {"id": "router_id", "label": "Router", "type": "number"},
             {"id": "network", "label": "Network", "type": "mono"},
+            {"id": "router_ip", "label": "Router IP", "type": "text"},
             {"id": "interface", "label": "Interface", "type": "text"},
             {"id": "is_connected", "label": "Connected", "type": "boolean"},
             {"id": "created_at", "label": "Recorded", "type": "datetime"},
         ],
         "query": lambda db: db.query(Network),
-        "serializer": lambda network: {
-            "id": network.id,
-            "discovery_run_id": network.discovery_run_id,
-            "router_id": network.router_id,
+        "serializer": lambda network, db: {
             "network": network.network,
+            "router_ip": network.router_ip,
             "interface": network.interface,
             "is_connected": network.is_connected,
             "created_at": _serialize_datetime(network.created_at),
         },
         "search_fields": [Network.network, Network.interface],
         "order_by": Network.created_at.desc(),
-        "supports_run_filter": True,
-        "run_column": Network.discovery_run_id,
+        "supports_run_filter": False,
     },
     "topology_links": {
         "columns": [
@@ -686,7 +686,7 @@ TABLE_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             {"id": "created_at", "label": "Recorded", "type": "datetime"},
         ],
         "query": lambda db: db.query(TopologyLink),
-        "serializer": lambda link: {
+        "serializer": lambda link, db: {
             "id": link.id,
             "discovery_run_id": link.discovery_run_id,
             "from_router_id": link.from_router_id,
@@ -714,7 +714,7 @@ TABLE_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             {"id": "last_verified", "label": "Last Verified", "type": "datetime"},
         ],
         "query": lambda db: db.query(NetworkLink),
-        "serializer": lambda link: {
+        "serializer": lambda link, db: {
             "id": link.id,
             "from_router_id": link.from_router_id,
             "to_router_id": link.to_router_id,
@@ -763,14 +763,35 @@ def get_table_data(
         if clauses:
             query = query.filter(or_(*clauses))
 
-    total = query.count()
-
-    order_by = config.get("order_by")
-    if order_by is not None:
-        query = query.order_by(order_by)
-
-    records = query.offset(offset).limit(limit).all()
-    rows = [config["serializer"](record) for record in records]
+    # Special handling for routes: filter out default routes and deduplicate
+    if table_key == "routes":
+        # Filter out meaningless default routes (0.0.0.0/0)
+        query = query.filter(~Route.destination.like("0.0.0.0/%"))
+        
+        # Get all routes first to deduplicate in Python
+        all_routes = query.all()
+        
+        # Deduplicate by destination network, keeping most recent
+        unique_routes = {}
+        for route in all_routes:
+            dest = route.destination
+            if dest not in unique_routes or route.created_at > unique_routes[dest].created_at:
+                unique_routes[dest] = route
+        
+        # Convert back to query-like result for pagination
+        routes_list = list(unique_routes.values())
+        total = len(routes_list)
+        
+        # Apply pagination after deduplication
+        records = routes_list[offset:offset + limit]
+        rows = [config["serializer"](record, db) for record in records]
+    else:
+        total = query.count()
+        order_by = config.get("order_by")
+        if order_by is not None:
+            query = query.order_by(order_by)
+        records = query.offset(offset).limit(limit).all()
+        rows = [config["serializer"](record, db) for record in records]
 
     return {
         "table": table_key,
@@ -799,7 +820,7 @@ TABLE_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             {"id": "finished_at", "label": "Finished", "type": "datetime"},
         ],
         "query": lambda db: db.query(DiscoveryRun),
-        "serializer": lambda run: {
+        "serializer": lambda run, db: {
             "id": run.id,
             "root_ip": run.root_ip,
             "status": run.status,
@@ -816,7 +837,6 @@ TABLE_DEFINITIONS: Dict[str, Dict[str, Any]] = {
     "routers": {
         "columns": [
             {"id": "id", "label": "Router ID", "type": "number"},
-            {"id": "discovery_run_id", "label": "Run", "type": "number"},
             {"id": "ip_address", "label": "IP Address", "type": "mono"},
             {"id": "hostname", "label": "Hostname", "type": "text"},
             {"id": "vendor", "label": "Vendor", "type": "badge"},
@@ -826,9 +846,8 @@ TABLE_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             {"id": "created_at", "label": "Discovered", "type": "datetime"},
         ],
         "query": lambda db: db.query(Router),
-        "serializer": lambda router: {
+        "serializer": lambda router, db: {
             "id": router.id,
-            "discovery_run_id": router.discovery_run_id,
             "ip_address": router.ip_address,
             "hostname": router.hostname,
             "vendor": router.vendor,
@@ -839,60 +858,49 @@ TABLE_DEFINITIONS: Dict[str, Dict[str, Any]] = {
         },
         "search_fields": [Router.ip_address, Router.hostname, Router.vendor, Router.model],
         "order_by": Router.created_at.desc(),
-        "supports_run_filter": True,
-        "run_column": Router.discovery_run_id,
+        "supports_run_filter": False,
     },
     "routes": {
         "columns": [
-            {"id": "id", "label": "Route ID", "type": "number"},
-            {"id": "discovery_run_id", "label": "Run", "type": "number"},
-            {"id": "router_id", "label": "Router", "type": "number"},
-            {"id": "destination", "label": "Destination", "type": "mono"},
-            {"id": "next_hop", "label": "Next Hop", "type": "mono"},
+            {"id": "destination", "label": "Destination Network", "type": "mono"},
+            {"id": "source_router_ip", "label": "Source Router IP", "type": "mono"},
+            {"id": "next_hop_router_ip", "label": "Next Hop Router IP", "type": "mono"},
             {"id": "protocol", "label": "Protocol", "type": "badge"},
             {"id": "discovered_via", "label": "Method", "type": "badge"},
             {"id": "created_at", "label": "Recorded", "type": "datetime"},
         ],
         "query": lambda db: db.query(Route),
-        "serializer": lambda route: {
-            "id": route.id,
-            "discovery_run_id": route.discovery_run_id,
-            "router_id": route.router_id,
+        "serializer": lambda route, db: {
             "destination": route.destination,
-            "next_hop": route.next_hop,
+            "source_router_ip": route.source_router_ip,
+            "next_hop_router_ip": _get_next_hop_router_ip(db, route.next_hop),
             "protocol": route.protocol,
             "discovered_via": route.discovered_via,
             "created_at": _serialize_datetime(route.created_at),
         },
         "search_fields": [Route.destination, Route.next_hop, Route.protocol],
         "order_by": Route.created_at.desc(),
-        "supports_run_filter": True,
-        "run_column": Route.discovery_run_id,
+        "supports_run_filter": False,
     },
     "networks": {
         "columns": [
-            {"id": "id", "label": "Network ID", "type": "number"},
-            {"id": "discovery_run_id", "label": "Run", "type": "number"},
-            {"id": "router_id", "label": "Router", "type": "number"},
             {"id": "network", "label": "Network", "type": "mono"},
+            {"id": "router_ip", "label": "Router IP", "type": "text"},
             {"id": "interface", "label": "Interface", "type": "text"},
             {"id": "is_connected", "label": "Connected", "type": "boolean"},
             {"id": "created_at", "label": "Recorded", "type": "datetime"},
         ],
         "query": lambda db: db.query(Network),
-        "serializer": lambda network: {
-            "id": network.id,
-            "discovery_run_id": network.discovery_run_id,
-            "router_id": network.router_id,
+        "serializer": lambda network, db: {
             "network": network.network,
+            "router_ip": network.router_ip,
             "interface": network.interface,
             "is_connected": network.is_connected,
             "created_at": _serialize_datetime(network.created_at),
         },
         "search_fields": [Network.network, Network.interface],
         "order_by": Network.created_at.desc(),
-        "supports_run_filter": True,
-        "run_column": Network.discovery_run_id,
+        "supports_run_filter": False,
     },
     "topology_links": {
         "columns": [
@@ -905,7 +913,7 @@ TABLE_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             {"id": "created_at", "label": "Recorded", "type": "datetime"},
         ],
         "query": lambda db: db.query(TopologyLink),
-        "serializer": lambda link: {
+        "serializer": lambda link, db: {
             "id": link.id,
             "discovery_run_id": link.discovery_run_id,
             "from_router_id": link.from_router_id,
@@ -933,7 +941,7 @@ TABLE_DEFINITIONS: Dict[str, Dict[str, Any]] = {
             {"id": "last_verified", "label": "Last Verified", "type": "datetime"},
         ],
         "query": lambda db: db.query(NetworkLink),
-        "serializer": lambda link: {
+        "serializer": lambda link, db: {
             "id": link.id,
             "from_router_id": link.from_router_id,
             "to_router_id": link.to_router_id,
@@ -982,14 +990,35 @@ def get_table_data(
         if clauses:
             query = query.filter(or_(*clauses))
 
-    total = query.count()
-
-    order_by = config.get("order_by")
-    if order_by is not None:
-        query = query.order_by(order_by)
-
-    records = query.offset(offset).limit(limit).all()
-    rows = [config["serializer"](record) for record in records]
+    # Special handling for routes: filter out default routes and deduplicate
+    if table_key == "routes":
+        # Filter out meaningless default routes (0.0.0.0/0)
+        query = query.filter(~Route.destination.like("0.0.0.0/%"))
+        
+        # Get all routes first to deduplicate in Python
+        all_routes = query.all()
+        
+        # Deduplicate by destination network, keeping most recent
+        unique_routes = {}
+        for route in all_routes:
+            dest = route.destination
+            if dest not in unique_routes or route.created_at > unique_routes[dest].created_at:
+                unique_routes[dest] = route
+        
+        # Convert back to query-like result for pagination
+        routes_list = list(unique_routes.values())
+        total = len(routes_list)
+        
+        # Apply pagination after deduplication
+        records = routes_list[offset:offset + limit]
+        rows = [config["serializer"](record, db) for record in records]
+    else:
+        total = query.count()
+        order_by = config.get("order_by")
+        if order_by is not None:
+            query = query.order_by(order_by)
+        records = query.offset(offset).limit(limit).all()
+        rows = [config["serializer"](record, db) for record in records]
 
     return {
         "table": table_key,

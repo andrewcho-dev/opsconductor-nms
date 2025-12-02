@@ -42,8 +42,6 @@ interface InventoryDevice {
 interface InventoryGridProps {
   apiBase: string;
   onNavigateToAdmin: () => void;
-  onNavigateToRouting: () => void;
-  onNavigateToRouter?: (routerId: number) => void;
 }
 
 interface SnmpConfig {
@@ -143,7 +141,7 @@ function renderComplexValue(value: any, depth: number = 0): React.ReactNode {
 
 const STATE_SERVER_API_BASE = "http://10.120.0.18:8000";
 
-function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToRouting, onNavigateToRouter }: InventoryGridProps) {
+function InventoryGrid({ apiBase, onNavigateToAdmin }: InventoryGridProps) {
   const [devices, setDevices] = useState<InventoryDevice[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -202,13 +200,6 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToRouting, onNavi
           navigator.clipboard.writeText(`${protocol} ${ipAddress}`);
         }
       }
-    }
-  };
-
-  const handleRouterClick = (device: InventoryDevice) => {
-    // Only navigate to routing page for router devices
-    if (device.device_type === 'router' && onNavigateToRouter) {
-      onNavigateToRouter(device.id);
     }
   };
 
@@ -526,14 +517,7 @@ function InventoryGrid({ apiBase, onNavigateToAdmin, onNavigateToRouting, onNavi
           </thead>
           <tbody>
             {filteredDevices.map((device) => (
-              <tr 
-                key={device.id}
-                onClick={() => handleRouterClick(device)}
-                style={{
-                  cursor: device.device_type === 'router' && onNavigateToRouter ? 'pointer' : 'default'
-                }}
-                title={device.device_type === 'router' && onNavigateToRouter ? 'Click to view routes' : undefined}
-              >
+              <tr key={device.id}>
                 <td className="ip-cell">{device.ip_address}</td>
                 <td className="type-cell">
                   <span className={`type-badge ${device.device_type || "unknown"}`}>

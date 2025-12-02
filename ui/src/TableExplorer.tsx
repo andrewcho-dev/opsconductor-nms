@@ -15,15 +15,7 @@ interface TableResponse {
   offset: number;
 }
 
-interface DiscoveryRunSummary {
-  id: number;
-  status: string;
-  root_ip: string;
-  started_at: string;
-}
-
 const TABLE_OPTIONS = [
-  { id: "discovery_runs", label: "Discovery Runs" },
   { id: "routers", label: "Routers" },
   { id: "routes", label: "Routes" },
   { id: "network_topology", label: "Network Topology" },
@@ -34,8 +26,6 @@ const TABLE_OPTIONS = [
 
 const TableExplorer = ({ apiBase }: TableExplorerProps) => {
   const [selectedTable, setSelectedTable] = useState<string>(TABLE_OPTIONS[1].id);
-  const [runs, setRuns] = useState<DiscoveryRunSummary[]>([]);
-  const [selectedRun, setSelectedRun] = useState<string>("");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [limit, setLimit] = useState(100);
@@ -51,30 +41,18 @@ const TableExplorer = ({ apiBase }: TableExplorerProps) => {
   }, [search]);
 
   useEffect(() => {
-    fetchRuns();
-  }, []);
-
-  useEffect(() => {
-    if (runs.length > 0) {
-      // Auto-select the latest run if none is selected and viewing topology links
-      if (!selectedRun && (selectedTable === 'topology_links' || selectedTable === 'routers' || selectedTable === 'routes')) {
-        const latestRun = runs[0]; // runs are already sorted by ID desc
-        setSelectedRun(latestRun.id.toString());
-      }
-    }
-  }, [runs, selectedTable, selectedRun]);
-
-  useEffect(() => {
     fetchRouters();
   }, []);
 
   useEffect(() => {
-    setOffset(0);
-  }, [selectedTable, selectedRun, debouncedSearch, limit]);
+    fetchTable();
+  }, [selectedTable, debouncedSearch, limit]);
 
   useEffect(() => {
-    fetchTable();
-  }, [selectedTable, selectedRun, debouncedSearch, limit, offset]);
+    if (tableData) {
+      fetchRouters();
+    }
+  }, [selectedTable, debouncedSearch, limit, offset]);
 
   const fetchRouters = async () => {
     await wrapAsync(async () => {
@@ -87,12 +65,49 @@ const TableExplorer = ({ apiBase }: TableExplorerProps) => {
     }, false);
   };
 
+  const enhanceNetworkData = (data: TableResponse): TableResponse => {
+    console.log('enhanceNetworkData called for:', data.table);
+    if (data.table !== 'networks') return data;
+    
+    console.log('Original columns:', data.columns.map(c => c.label));
+    console.log('Routers available:', Object.keys(routers).length);
+    
+    // Convert router_id to router IP and remove unwanted columns
+    const enhancedColumns = data.columns
+      .filter(col => col.id !== 'id' && col.id !== 'discovery_run_id' && col.id !== 'router_id')
+      .map((col) => {
+        return col;
+      });
+
+    // Add Router IP column
+    enhancedColumns.splice(1, 0, { id: 'router_ip', label: 'Router IP', type: 'text' });
+
+    console.log('Enhanced columns:', enhancedColumns.map(c => c.label));
+
+    // Convert router_id values to router IP addresses and remove unwanted fields
+    const enhancedRows = data.rows.map((row) => {
+      const { id, discovery_run_id, router_id, ...cleanRow } = row;
+      return {
+        ...cleanRow,
+        router_ip: routers[router_id]?.ip_address || `Router ${router_id}`,
+      };
+    });
+
+    const result = {
+      ...data,
+      columns: enhancedColumns,
+      rows: enhancedRows,
+    };
+    
+    console.log('Returning enhanced data with', result.columns.length, 'columns');
+    return result;
+  };
+
   const enhanceTopologyLinkData = (data: TableResponse): TableResponse => {
     if (data.table !== 'topology_links') return data;
     
-    // Remove discovery_run_id column and enhance router columns
+    // Enhance router columns
     const enhancedColumns = data.columns
-      .filter(col => col.id !== 'discovery_run_id')
       .map((col) => {
         if (col.id === 'from_router_id') {
           return { ...col, id: 'from_router_ip', label: 'From Router IP' };
@@ -136,37 +151,7 @@ const TableExplorer = ({ apiBase }: TableExplorerProps) => {
     };
   };
 
-  const enhanceRoutesData = (data: TableResponse): TableResponse => {
-    if (data.table !== 'routes') return data;
-    
-    // Remove discovery_run_id column and enhance router column
-    const enhancedColumns = data.columns
-      .filter(col => col.id !== 'discovery_run_id')
-      .map((col) => {
-        if (col.id === 'router_id') {
-          return { ...col, id: 'router_ip', label: 'Router IP' };
-        }
-        return col;
-      });
-
-    // Add router hostname column after router IP
-    const columnsWithHostname = [
-      ...enhancedColumns.slice(0, 1),
-      { id: 'router_hostname', label: 'Hostname', type: 'text' },
-      ...enhancedColumns.slice(1)
-    ];
-    
-    return {
-      ...data,
-      columns: columnsWithHostname,
-      rows: data.rows.map((row) => ({
-        ...row,
-        router_ip: routers[row.router_id]?.ip_address || `Router ${row.router_id}`,
-        router_hostname: routers[row.router_id]?.hostname || 'Unknown',
-      }))
-    };
-  };
-
+  
   const buildNetworkTopology = (): TableResponse => {
     // Build hub-and-spoke topology based on expected traceroute paths
     const topologyColumns = [
@@ -203,19 +188,6 @@ const TableExplorer = ({ apiBase }: TableExplorerProps) => {
     };
   };
 
-  const fetchRuns = async () => {
-    await wrapAsync(async () => {
-      const data = await apiCall<DiscoveryRunSummary[]>(`${apiBase}/api/discover`);
-      const sortedRuns = (data || []).sort((a, b) => b.id - a.id);
-      setRuns(sortedRuns);
-      
-      // Auto-select the latest run if none is selected and viewing topology links
-      if (sortedRuns.length > 0 && !selectedRun && (selectedTable === 'topology_links' || selectedTable === 'routers' || selectedTable === 'routes')) {
-        setSelectedRun(sortedRuns[0].id.toString());
-      }
-    }, false); // Don't show loading for background fetch
-  };
-
   const fetchTable = async () => {
     // For network topology, build it from routes data
     if (selectedTable === 'network_topology') {
@@ -228,25 +200,32 @@ const TableExplorer = ({ apiBase }: TableExplorerProps) => {
       return;
     }
 
-    const params = new URLSearchParams({
-      table: selectedTable,
-      limit: String(limit),
-      offset: String(offset),
-    });
-
-    if (selectedRun) params.set('run_id', selectedRun);
-    if (debouncedSearch) params.set('search', debouncedSearch);
+    // For networks table, ensure routers are loaded first
+    if (selectedTable === 'networks' && Object.keys(routers).length === 0) {
+      await fetchRouters();
+    }
 
     await wrapAsync(async () => {
-      const data = await apiCall<TableResponse>(`${apiBase}/api/tables?${params}`);
-      let enhancedData = data;
-      
-      if (data.table === 'topology_links') {
-        enhancedData = enhanceTopologyLinkData(data);
-      } else if (data.table === 'routes') {
-        enhancedData = enhanceRoutesData(data);
+      const response = await fetch(`${apiBase}/api/tables?table=${selectedTable}&limit=${limit}&offset=${offset}`);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch table data: ${response.statusText}`);
       }
       
+      const data: TableResponse = await response.json();
+      console.log('fetchTable: Raw data from API', data.table, 'with', data.rows.length, 'rows');
+      
+      let enhancedData = data;
+      
+      if (data.table === 'networks') {
+        console.log('fetchTable: Calling enhanceNetworkData');
+        enhancedData = enhanceNetworkData(data);
+      } else if (data.table === 'topology_links') {
+        enhancedData = enhanceTopologyLinkData(data);
+      }
+      
+      console.log('fetchTable: Setting tableData with', enhancedData.columns.length, 'columns');
+      console.log('fetchTable: Final columns being passed to DataTable:', enhancedData.columns.map(c => ({ id: c.id, label: c.label })));
+      console.log('fetchTable: Final rows sample:', enhancedData.rows.slice(0, 2));
       setTableData(enhancedData);
     });
   };
@@ -262,41 +241,23 @@ const TableExplorer = ({ apiBase }: TableExplorerProps) => {
     <div className="inventory-container">
       <div className="table-explorer">
         <div className="table-explorer__toolbar">
-        <select
-          value={selectedTable}
-          onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setSelectedTable(e.target.value)}
-        >
-          {TABLE_OPTIONS.map((option) => (
-            <option key={option.id} value={option.id}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-        <select
-          value={selectedRun}
-          onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setSelectedRun(e.target.value)}
-        >
-          <option value="">All runs</option>
-          {runs.map((run) => (
-            <option key={run.id} value={run.id}>
-              #{run.id} – {run.root_ip} ({run.status})
-            </option>
-          ))}
-        </select>
-        <input
-          type="search"
-          value={search}
-          onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearch(e.target.value)}
-          placeholder="Filter rows..."
-        />
-        <select value={limit} onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setLimit(Number(e.target.value))}>
-          {[50, 100, 250, 500].map((size) => (
-            <option key={size} value={size}>
-              {size}
-            </option>
-          ))}
-        </select>
-        <button onClick={() => fetchTable()} disabled={isLoading}>
+          <select
+            value={selectedTable}
+            onChange={(e: React.ChangeEvent<HTMLSelectElement>) => setSelectedTable(e.target.value)}
+          >
+            {TABLE_OPTIONS.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <input
+            type="search"
+            value={search}
+            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearch(e.target.value)}
+            placeholder="Filter rows..."
+          />
+          <button onClick={() => fetchTable()} disabled={isLoading}>
           {isLoading ? "Loading…" : "Refresh"}
         </button>
         <span>

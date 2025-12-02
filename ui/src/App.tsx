@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import InventoryGrid from "./InventoryGrid";
 import Admin from "./Admin";
-import RoutingTable from "./RoutingTable";
 import Navigation from "./Navigation";
 import TableExplorer from "./TableExplorer";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -10,36 +9,28 @@ import ErrorBoundary from "./components/ErrorBoundary";
 // We hardcode apiBase here to avoid any ambiguity with Vite env vars.
 const apiBase = "http://10.120.0.18:8000";
 
-type Page = "inventory" | "admin" | "routing" | "tables";
+type Page = "inventory" | "admin" | "tables";
 
 function App() {
   const [currentPage, setCurrentPage] = useState<Page>("inventory");
-  const [selectedRouterId, setSelectedRouterId] = useState<number | null>(null);
 
   const contentClass = `content${currentPage === "inventory" ? " content--inventory" : currentPage === "tables" ? " content--tables" : ""}`;
-
-  const handleNavigateToRouter = (routerId: number) => {
-    setSelectedRouterId(routerId);
-    setCurrentPage("routing");
-  };
 
   // Handle browser back/forward buttons
   useEffect(() => {
     const handlePopState = (event: PopStateEvent) => {
       if (event.state) {
         setCurrentPage(event.state.page);
-        setSelectedRouterId(event.state.selectedRouterId || null);
       } else {
         // If no state, default to inventory
         setCurrentPage("inventory");
-        setSelectedRouterId(null);
       }
     };
 
     window.addEventListener('popstate', handlePopState);
     
     // Set initial state
-    window.history.replaceState({ page: currentPage, selectedRouterId }, '', `/${currentPage}`);
+    window.history.replaceState({ page: currentPage }, '', `/${currentPage}`);
 
     return () => {
       window.removeEventListener('popstate', handlePopState);
@@ -48,8 +39,8 @@ function App() {
 
   // Update history when page changes
   useEffect(() => {
-    window.history.pushState({ page: currentPage, selectedRouterId }, '', `/${currentPage}`);
-  }, [currentPage, selectedRouterId]);
+    window.history.pushState({ page: currentPage }, '', `/${currentPage}`);
+  }, [currentPage]);
 
   return (
     <ErrorBoundary
@@ -96,15 +87,10 @@ function App() {
             <InventoryGrid
               apiBase={apiBase}
               onNavigateToAdmin={() => setCurrentPage("admin")}
-              onNavigateToRouting={() => setCurrentPage("routing")}
-              onNavigateToRouter={handleNavigateToRouter}
             />
           )}
           {currentPage === "admin" && (
             <Admin apiBase={apiBase} />
-          )}
-          {currentPage === "routing" && (
-            <RoutingTable apiBase={apiBase} selectedRouterId={selectedRouterId} />
           )}
           {currentPage === "tables" && (
             <TableExplorer apiBase={apiBase} />

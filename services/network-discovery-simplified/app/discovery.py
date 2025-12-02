@@ -43,15 +43,16 @@ class NetworkDiscovery:
                 root_ip, snmp_community, ssh_credentials, run.id
             )
             
-            # Build topology links
-            self._build_topology_links(run.id)
+            # Simple traceroute discovery to find more routers
+            self._discover_routers_via_traceroute(root_ip, snmp_community, ssh_credentials)
             
             # Update run with results
             run.status = 'COMPLETED'
             run.finished_at = datetime.utcnow()
             run.routers_found = len(discovered_routers)
-            run.routes_found = self.db.query(Route).filter(Route.discovery_run_id == run.id).count()
-            run.networks_found = self.db.query(Network).filter(Network.discovery_run_id == run.id).count()
+            from app.models import Router, Route
+            run.routes_found = self.db.query(Route).count()
+            run.networks_found = self.db.query(Network).count()
             
             self.db.commit()
             logger.info(f"Discovery completed: {run.routers_found} routers, {run.routes_found} routes, {run.networks_found} networks")
@@ -91,24 +92,33 @@ class NetworkDiscovery:
             try:
                 logger.info(f"  Trying SNMP discovery for {current_ip}")
                 system_info = self.snmp_client.get_system_info(current_ip, snmp_community)
-                routes = self.snmp_client.get_routes(current_ip, snmp_community)
+                snmp_routes = self.snmp_client.get_routes(current_ip, snmp_community)
                 interfaces = self.snmp_client.get_interfaces(current_ip, snmp_community)
-                logger.info(f"  SNMP discovery SUCCESS: {len(routes)} routes, {len(interfaces)} interfaces")
+                logger.info(f"  SNMP discovery SUCCESS: {len(snmp_routes)} routes, {len(interfaces)} interfaces")
                 
-                # For edge routers, SNMP is usually sufficient and much faster
-                # Only try SSH if SNMP found no routes and we have credentials
-                if not routes and ssh_credentials:
-                    logger.info(f"  SNMP found no routes, trying SSH as fallback")
-                    discovery_method = 'cli'
-                    ssh_routes = self._get_routes_ssh_optimized(current_ip, ssh_credentials, system_info)
-                    if ssh_routes:
-                        routes = ssh_routes
-                        logger.info(f"  SSH fallback found {len(routes)} routes")
+                # Always try SSH if we have credentials to get full routing tables with next hops
+                if ssh_credentials:
+                    logger.info(f"  Trying SSH for full routing table with next hops...")
+                    try:
+                        ssh_routes = self._get_routes_ssh_optimized(current_ip, ssh_credentials, system_info)
+                        if ssh_routes and len(ssh_routes) > len(snmp_routes):
+                            logger.info(f"  SSH found more detailed routes: {len(ssh_routes)} vs SNMP {len(snmp_routes)}")
+                            routes = ssh_routes
+                            discovery_method = 'cli'
+                        else:
+                            routes = snmp_routes
+                            logger.info(f"  Using SNMP routes: {len(routes)}")
+                    except Exception as ssh_e:
+                        logger.warning(f"  SSH failed, using SNMP routes: {ssh_e}")
+                        routes = snmp_routes
+                else:
+                    routes = snmp_routes
+                    logger.info(f"  No SSH credentials, using SNMP routes only")
                 
             except Exception as snmp_e:
                 logger.info(f"  SNMP failed: {snmp_e}")
                 
-                # Only try SSH if SNMP failed and we have credentials
+                # Try SSH if SNMP failed and we have credentials
                 if ssh_credentials:
                     logger.info(f"  SNMP failed, trying SSH discovery")
                     discovery_method = 'cli'
@@ -297,7 +307,6 @@ class NetworkDiscovery:
             existing_router = self.db.query(Router).filter(Router.ip_address == ip).first()
             if existing_router:
                 # Update existing router with new discovery info
-                existing_router.discovery_run_id = run_id
                 existing_router.hostname = system_info.hostname if system_info else existing_router.hostname
                 existing_router.vendor = self._extract_vendor(system_info) or existing_router.vendor
                 existing_router.model = self._extract_model(system_info) or existing_router.model
@@ -311,7 +320,6 @@ class NetworkDiscovery:
             else:
                 # Create new router
                 router = Router(
-                    discovery_run_id=run_id,
                     ip_address=ip,
                     hostname=system_info.hostname if system_info else None,
                     vendor=self._extract_vendor(system_info),
@@ -337,11 +345,10 @@ class NetworkDiscovery:
                     # Calculate network address and CIDR prefix
                     destination_cidr = self._ip_and_mask_to_cidr(dest_ip, netmask)
                     
-                    existing_route = self.db.query(Route).filter(Route.router_id == router.id, Route.destination == destination_cidr).first()
+                    existing_route = self.db.query(Route).filter(Route.source_router_ip == router.ip_address, Route.destination == destination_cidr).first()
                     if not existing_route:
                         db_route = Route(
-                            router_id=router.id,
-                            discovery_run_id=run_id,
+                            source_router_ip=router.ip_address,
                             destination=destination_cidr,
                             next_hop=route.next_hop,
                             protocol=route.protocol if hasattr(route, 'protocol') else 'connected',
@@ -351,11 +358,10 @@ class NetworkDiscovery:
                 else:
                     # Handle legacy route format
                     destination_cidr = route.destination if '/' in route.destination else f"{route.destination}/24"
-                    existing_route = self.db.query(Route).filter(Route.router_id == router.id, Route.destination == destination_cidr).first()
+                    existing_route = self.db.query(Route).filter(Route.source_router_ip == router.ip_address, Route.destination == destination_cidr).first()
                     if not existing_route:
                         db_route = Route(
-                            router_id=router.id,
-                            discovery_run_id=run_id,
+                            source_router_ip=router.ip_address,
                             destination=destination_cidr,
                             next_hop=getattr(route, 'next_hop', None),
                             protocol=getattr(route, 'protocol', 'connected'),
@@ -365,17 +371,72 @@ class NetworkDiscovery:
             
             # Save networks/interfaces
             for interface in interfaces:
-                network_str = f"{interface.network}/{interface.netmask}" if hasattr(interface, 'network') else f"{ip}/24"
-                existing_network = self.db.query(Network).filter(Network.router_id == router.id, Network.network == network_str).first()
+                # Handle both dict interfaces (from SNMP) and object interfaces (from SSH)
+                if isinstance(interface, dict):
+                    interface_ip = interface.get('ip', ip)
+                    interface_netmask = interface.get('netmask', '255.255.255.0')
+                    interface_name = interface.get('name', 'unknown')
+                    # Calculate network from IP and netmask
+                    network_str = self._calculate_network_from_ip(interface_ip, interface_netmask)
+                else:
+                    # SSH/CLI interface objects
+                    interface_ip = getattr(interface, 'ip_address', ip)
+                    interface_netmask = getattr(interface, 'netmask', '255.255.255.0')
+                    interface_name = getattr(interface, 'name', 'unknown')
+                    network_str = f"{getattr(interface, 'network', interface_ip)}/{interface_netmask}"
+                
+                # Check if this exact network already exists for this router in this run
+                existing_network = self.db.query(Network).filter(
+                    Network.router_ip == router.ip_address, 
+                    Network.network == network_str
+                ).first()
                 if not existing_network:
                     network = Network(
-                        discovery_run_id=run_id,  # Add missing discovery_run_id
-                        router_id=router.id,
+                        router_ip=router.ip_address,
                         network=network_str,
-                        interface=getattr(interface, 'name', 'unknown'),
+                        interface=interface_name,
                         is_connected=True
                     )
                     self.db.add(network)
+            
+            # CRITICAL FIX: Always create a network for the router's main IP address
+            # This ensures we capture networks from traceroute discovery and router IPs
+            router_network = self._calculate_network_from_ip(ip, '255.255.255.0')
+            existing_router_network = self.db.query(Network).filter(
+                Network.router_ip == router.ip_address,
+                Network.network == router_network
+            ).first()
+            if not existing_router_network:
+                router_main_network = Network(
+                    router_ip=router.ip_address,
+                    network=router_network,
+                    interface='main_ip',
+                    is_connected=True
+                )
+                self.db.add(router_main_network)
+                logger.info(f"  Added main router network: {router_network} for {ip}")
+            
+            # Also create networks from discovered routes (connected routes)
+            for route in routes:
+                if hasattr(route, 'destination') and route.destination:
+                    # For connected routes, create network entries
+                    route_network = self._ip_and_mask_to_cidr(
+                        route.destination, 
+                        getattr(route, 'netmask', '255.255.255.0')
+                    )
+                    existing_route_network = self.db.query(Network).filter(
+                        Network.router_ip == router.ip_address,
+                        Network.network == route_network
+                    ).first()
+                    if not existing_route_network and route_network != router_network:
+                        route_network_entry = Network(
+                            router_ip=router.ip_address,
+                            network=route_network,
+                            interface='connected_route',
+                            is_connected=True
+                        )
+                        self.db.add(route_network_entry)
+                        logger.info(f"  Added route network: {route_network} for {ip}")
             
             self.db.commit()
             return router
@@ -384,6 +445,20 @@ class NetworkDiscovery:
             logger.error(f"  Failed to save router {ip}: {e}")
             self.db.rollback()
             return None
+    
+    def _calculate_network_from_ip(self, ip: str, netmask: str) -> str:
+        """Calculate network address from IP and netmask."""
+        try:
+            import ipaddress
+            network = ipaddress.IPv4Network(f"{ip}/{netmask}", strict=False)
+            return str(network)
+        except Exception as e:
+            logger.warning(f"Failed to calculate network for {ip}/{netmask}: {e}")
+            # Fallback to simple /24 if calculation fails
+            parts = ip.split('.')
+            if len(parts) == 4:
+                return f"{parts[0]}.{parts[1]}.{parts[2]}.0/24"
+            return f"{ip}/24"
     
     def _extract_vendor(self, system_info) -> str:
         """Extract vendor from system info."""
@@ -914,7 +989,7 @@ class NetworkDiscovery:
     
     def _build_topology_links(self, run_id: int):
         """Build topology links based on traceroute data and shared networks."""
-        routers = self.db.query(Router).filter(Router.discovery_run_id == run_id, Router.is_router == True).all()
+        routers = self.db.query(Router).filter(Router.is_router == True).all()
         
         # First, build topology from traceroute data
         self._build_traceroute_topology(run_id, routers)
@@ -1117,6 +1192,27 @@ class NetworkDiscovery:
         existing_router = self.db.query(Router).filter(Router.ip_address == ip).first()
         if existing_router:
             logger.info(f"Using existing router for {ip} from discovery run {existing_router.discovery_run_id}")
+            
+            # CRITICAL FIX: Create network record for existing routers used in traceroute
+            # This ensures we capture networks for ALL routers discovered via traceroute
+            router_network = self._calculate_network_from_ip(ip, '255.255.255.0')
+            existing_network = self.db.query(Network).filter(
+                Network.router_id == existing_router.id,
+                Network.network == router_network,
+                Network.discovery_run_id == run_id
+            ).first()
+            if not existing_network:
+                network = Network(
+                    discovery_run_id=run_id,
+                    router_id=existing_router.id,
+                    network=router_network,
+                    interface='traceroute_existing',
+                    is_connected=True
+                )
+                self.db.add(network)
+                self.db.commit()
+                logger.info(f"  Added network for existing traceroute router: {router_network} for {ip}")
+            
             return existing_router
         
         # Create completely new router if none exists
@@ -1134,6 +1230,27 @@ class NetworkDiscovery:
         try:
             self.db.commit()
             logger.info(f"Created new traceroute-discovered router: {ip}")
+            
+            # CRITICAL FIX: Create network record for traceroute-discovered routers
+            # This ensures we capture ALL networks from traceroute discovery
+            router_network = self._calculate_network_from_ip(ip, '255.255.255.0')
+            existing_network = self.db.query(Network).filter(
+                Network.router_id == router.id,
+                Network.network == router_network,
+                Network.discovery_run_id == run_id
+            ).first()
+            if not existing_network:
+                network = Network(
+                    discovery_run_id=run_id,
+                    router_id=router.id,
+                    network=router_network,
+                    interface='traceroute_discovered',
+                    is_connected=True
+                )
+                self.db.add(network)
+                self.db.commit()
+                logger.info(f"  Added traceroute network: {router_network} for {ip}")
+                
         except Exception as e:
             self.db.rollback()
             logger.error(f"Failed to create router {ip}: {e}")
@@ -1197,6 +1314,122 @@ class NetworkDiscovery:
                         self.db.add(link)
         
         self.db.commit()
+    
+    def _discover_routers_via_traceroute(self, root_ip: str, snmp_community: str, ssh_credentials):
+        """Simple traceroute discovery to find additional routers."""
+        logger.info("Starting simple traceroute discovery...")
+        
+        # ONLY INTERNAL ROUTERS - like the user specified
+        targets = [
+            "10.121.1.1", "10.121.2.1", "10.121.3.1", "10.121.4.1", "10.121.5.1",
+            "10.121.6.1", "10.121.7.1", "10.121.8.1", "10.121.9.1", "10.121.10.1",
+            "10.121.11.1", "10.121.12.1", "10.121.13.1", "10.121.14.1", "10.121.15.1",
+            "10.121.16.1", "10.121.17.1", "10.121.18.1", "10.121.19.1", "10.121.20.1",
+            "10.121.21.1", "10.121.22.1", "10.121.23.1", "10.121.24.1", "10.121.25.1"
+        ]
+        
+        discovered_ips = set()
+        
+        for target in targets:
+            try:
+                logger.info(f"Tracerouting to {target}...")
+                hops = self._perform_traceroute(target)
+                logger.info(f"  Hops: {hops}")
+                
+                for hop_ip in hops:
+                    if hop_ip and hop_ip != root_ip:
+                        # Only exclude obvious localhost/Docker IPs, but include real network hops
+                        if not (hop_ip.startswith('127.') or hop_ip == '0.0.0.0'):
+                            discovered_ips.add(hop_ip)
+                            logger.info(f"  Found potential router: {hop_ip}")
+                        
+            except Exception as e:
+                logger.warning(f"Traceroute to {target} failed: {e}")
+        
+        logger.info(f"Total unique IPs discovered: {len(discovered_ips)}")
+        
+        # Try to discover information about each new router IP
+        for ip in discovered_ips:
+            try:
+                logger.info(f"Attempting to discover router at {ip}...")
+                
+                # Try SNMP discovery
+                system_info = self.snmp_client.get_system_info(ip, snmp_community)
+                routes = []
+                interfaces = []
+                
+                if system_info:
+                    logger.info(f"  SNMP successful for {ip}")
+                    try:
+                        routes = self.snmp_client.get_routes(ip, snmp_community)
+                        interfaces = self.snmp_client.get_interfaces(ip, snmp_community)
+                        logger.info(f"  Got {len(routes)} routes and {len(interfaces)} interfaces")
+                    except Exception as e:
+                        logger.warning(f"  SNMP routes/interfaces failed: {e}")
+                        routes = []
+                        interfaces = []
+                    discovery_method = 'snmp'
+                    
+                    # Use the original _save_router method to get ALL data including routes and networks
+                    router = self._save_router(ip, system_info, routes, interfaces, discovery_method, None)
+                    if router:
+                        logger.info(f"  Successfully saved full router data: {ip}")
+                    continue
+                else:
+                    # Try basic ping check
+                    response = subprocess.run(['ping', '-c', '1', '-W', '2', ip], 
+                                            capture_output=True, text=True)
+                    if response.returncode == 0:
+                        logger.info(f"  Ping successful for {ip} (no SNMP)")
+                        discovery_method = 'ping'
+                    else:
+                        logger.info(f"  No ping response from {ip}, but discovered via traceroute")
+                        discovery_method = 'traceroute_only'
+                
+                # Create a basic router entry even without full discovery
+                # Force classification as router since we found it via traceroute
+                existing_router = self.db.query(Router).filter(Router.ip_address == ip).first()
+                if existing_router:
+                    logger.info(f"  Router already exists: {ip}")
+                    continue
+                
+                # Create new router with minimal info
+                router = Router(
+                    ip_address=ip,
+                    hostname=f"router-{ip.replace('.', '-')}",
+                    vendor="Unknown",
+                    model="Discovered via traceroute",
+                    is_router=True,  # Force classification as router
+                    router_score=0.5,  # Lower confidence but still a router
+                    discovered_via=discovery_method
+                )
+                router.classification_reason = "discovered_via_traceroute"
+                
+                self.db.add(router)
+                self.db.commit()
+                logger.info(f"  Successfully saved router discovered via traceroute: {ip}")
+                
+                # Also create a basic network entry for this router
+                router_network = self._calculate_network_from_ip(ip, '255.255.255.0')
+                existing_network = self.db.query(Network).filter(
+                    Network.router_ip == ip,
+                    Network.network == router_network
+                ).first()
+                if not existing_network:
+                    network = Network(
+                        router_ip=ip,
+                        network=router_network,
+                        interface='traceroute_discovery',
+                        is_connected=True
+                    )
+                    self.db.add(network)
+                    self.db.commit()
+                    logger.info(f"  Added network for traceroute router: {router_network}")
+                
+            except Exception as e:
+                logger.error(f"Failed to discover router at {ip}: {e}")
+        
+        logger.info(f"Traceroute discovery completed, found {len(discovered_ips)} additional router IPs")
     
     def _classify_router(self, system_info: SystemInfo, routes: List[RouteEntry], interfaces: List[Dict]) -> bool:
         """Simple router classification."""

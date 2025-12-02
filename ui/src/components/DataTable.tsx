@@ -70,20 +70,38 @@ function getBadgeClass(value: any): string {
 }
 
 const DataTable = ({ columns, rows, density = "comfortable" }: DataTableProps) => {
+  console.log('🔥 DataTable COMPONENT LOADED WITH COLUMNS:', columns.map(c => ({ id: c.id, label: c.label })));
+  console.log('🔥 DataTable COMPONENT LOADED WITH ROWS SAMPLE:', rows.slice(0, 2));
   const [sorting, setSorting] = useState<SortingState>([{ id: columns[0]?.id || '', desc: false }]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [globalFilter, setGlobalFilter] = useState("");
   const [columnVisibility, setColumnVisibility] = useState<VisibilityState>({});
 
+  // Filter out unwanted columns
+  const filteredColumns = useMemo(() => {
+    console.log('🔥 DataTable COMPONENT LOADED WITH COLUMNS:', columns.map(c => ({ id: c.id, label: c.label })));
+    const filtered = columns.filter(col => {
+      // Remove run and ID columns
+      if (col.id === 'discovery_run_id' || col.id === 'id' || col.id === 'router_id') return false;
+      
+      // AGGRESSIVELY Remove any hostname columns
+      if (col.label === 'Hostname' || col.id === 'hostname' || col.label.includes('Hostname')) return false;
+      
+      return true;
+    });
+    console.log('🔥 DataTable FILTERED COLUMNS:', filtered.map(c => ({ id: c.id, label: c.label })));
+    return filtered;
+  }, [columns]);
+
   // Update default sorting when columns change
   useEffect(() => {
-    if (columns.length > 0 && (sorting.length === 0 || !columns.find(col => col.id === sorting[0]?.id))) {
-      setSorting([{ id: columns[0].id, desc: false }]);
+    if (filteredColumns.length > 0 && (sorting.length === 0 || !filteredColumns.find(col => col.id === sorting[0]?.id))) {
+      setSorting([{ id: filteredColumns[0].id, desc: false }]);
     }
-  }, [columns, sorting]);
+  }, [filteredColumns, sorting]);
 
   const columnDefs: ColumnDef<Record<string, any>>[] = useMemo(() => {
-    return columns.map((col) => ({
+    return filteredColumns.map((col) => ({
       id: col.id,
       accessorKey: col.id,
       header: col.label,
@@ -103,7 +121,7 @@ const DataTable = ({ columns, rows, density = "comfortable" }: DataTableProps) =
         align: typeToAlign[col.type || ""] || "left",
       },
     }));
-  }, [columns]);
+  }, [filteredColumns]);
 
   const table = useReactTable({
     data: rows,

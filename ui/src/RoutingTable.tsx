@@ -47,9 +47,28 @@ function RoutingTable({ apiBase, selectedRouterId: propSelectedRouterId }: Routi
       const routerData = await response.json();
       setRouters(routerData);
       
-      // Auto-select first router if none selected
+      // Auto-select first router with routes if none selected
       if (routerData.length > 0 && !selectedRouterId) {
-        setSelectedRouterId(routerData[0].id);
+        // Try to find a router that has routes
+        for (const router of routerData) {
+          try {
+            const routesResponse = await fetch(`${apiBase}/api/v1/routers/${router.id}/routes`);
+            if (routesResponse.ok) {
+              const routes = await routesResponse.json();
+              if (routes.length > 0) {
+                setSelectedRouterId(router.id);
+                console.log(`Auto-selected router ${router.ip_address} with ${routes.length} routes`);
+                break;
+              }
+            }
+          } catch (err) {
+            console.warn(`Failed to check routes for router ${router.ip_address}:`, err);
+          }
+        }
+        // Fallback to first router if none have routes
+        if (!selectedRouterId) {
+          setSelectedRouterId(routerData[0].id);
+        }
       }
     } catch (err) {
       console.error("Error in loadRouters:", err);
@@ -252,28 +271,48 @@ function RoutingTable({ apiBase, selectedRouterId: propSelectedRouterId }: Routi
           </div>
 
           <div className="inventory-grid-wrapper">
-            <table className="inventory-table">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Destination</th>
-                  <th>Netmask</th>
-                  <th>Next Hop</th>
-                  <th>Protocol</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.routes.map((route, idx) => (
-                  <tr key={idx}>
-                    <td>{idx + 1}</td>
-                    <td>{route.destination}</td>
-                    <td>{route.netmask}</td>
-                    <td>{route.next_hop || "—"}</td>
-                    <td>{route.protocol || "—"}</td>
+            {data.routes.length === 0 ? (
+              <div style={{
+                padding: "2rem",
+                textAlign: "center",
+                backgroundColor: "#f9fafb",
+                borderRadius: "0.5rem",
+                border: "1px solid #e5e7eb"
+              }}>
+                <div style={{ fontSize: "1rem", color: "#6b7280", marginBottom: "0.5rem" }}>
+                  No routes found for this router
+                </div>
+                <div style={{ fontSize: "0.875rem", color: "#9ca3af" }}>
+                  This router may not have been discovered with routing information, or routes may not be available via SNMP/CLI.
+                </div>
+                <div style={{ fontSize: "0.875rem", color: "#9ca3af", marginTop: "0.5rem" }}>
+                  Try selecting a different router from the dropdown above.
+                </div>
+              </div>
+            ) : (
+              <table className="inventory-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Destination</th>
+                    <th>Netmask</th>
+                    <th>Next Hop</th>
+                    <th>Protocol</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {data.routes.map((route, idx) => (
+                    <tr key={idx}>
+                      <td>{idx + 1}</td>
+                      <td>{route.destination}</td>
+                      <td>{route.netmask}</td>
+                      <td>{route.next_hop || "—"}</td>
+                      <td>{route.protocol || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </>
       )}

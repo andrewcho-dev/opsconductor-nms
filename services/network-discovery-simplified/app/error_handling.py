@@ -303,23 +303,17 @@ async def error_handling_middleware(request: Request, call_next):
         if isinstance(e, IntegrityError):
             nms_error = DatabaseError(
                 message=str(e),
-                operation="integrity_check",
-                user_message="Data integrity violation. Please check your input.",
-                troubleshooting="Ensure data doesn't conflict with existing records."
+                operation="integrity_check"
             )
         elif isinstance(e, OperationalError):
             nms_error = DatabaseError(
                 message=str(e),
-                operation="database_operation",
-                user_message="Database temporarily unavailable.",
-                troubleshooting="Try again in a few moments. Contact support if persistent."
+                operation="database_operation"
             )
         else:
             nms_error = DatabaseError(
                 message=str(e),
-                operation="database_query",
-                user_message="Database error occurred.",
-                troubleshooting="Contact support with the error ID."
+                operation="database_query"
             )
 
         logger.log_error(nms_error, request, exc_info=True)

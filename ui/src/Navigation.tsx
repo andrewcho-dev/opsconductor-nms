@@ -1,4 +1,4 @@
-type Page = "inventory" | "admin" | "routing" | "tables";
+type Page = "inventory" | "admin" | "tables";
 
 interface NavigationProps {
   currentPage: Page;
@@ -8,7 +8,6 @@ interface NavigationProps {
 function Navigation({ currentPage, onNavigate }: NavigationProps) {
   const navItems = [
     { id: "inventory", label: "Inventory", icon: "📋" },
-    { id: "routing", label: "Routes", icon: "🌐" },
     { id: "tables", label: "Tables", icon: "📊" },
     { id: "admin", label: "Admin", icon: "⚙️" }
   ];

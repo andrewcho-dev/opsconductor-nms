@@ -1924,36 +1924,6 @@ body {
   text-transform: uppercase;
 }
 
-.status-badge.RUNNING {
-  background-color: #bfdbfe;
-  color: #1e40af;
-}
-
-.status-badge.COMPLETED {
-  background-color: #bbf7d0;
-  color: #065f46;
-}
-
-.status-badge.FAILED {
-  background-color: #fecaca;
-  color: #991b1b;
-}
-
-.status-badge.PENDING {
-  background-color: #fed7aa;
-  color: #92400e;
-}
-
-.status-badge.PAUSED {
-  background-color: #fbbf24;
-  color: #78350f;
-}
-
-.status-badge.CANCELLED {
-  background-color: #fecaca;
-  color: #991b1b;
-}
-
 .topology-section {
   background-color: white;
   border-radius: 0.5rem;
